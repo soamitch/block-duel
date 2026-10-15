@@ -1,0 +1,9 @@
+{
+  "name": "block-duel-lan",
+  "version": "1.0.0",
+  "description": "Two-player falling-block duel for a TV, played with phones over the local network",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=16" },
+  "license": "MIT"
+}

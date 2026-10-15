@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#10141a">
+<title>Block Duel Controller</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Hanken+Grotesk:wght@400;600;700&family=Spline+Sans+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: one phone screen. Header with seat chip, a message block or a big swipe surface in the middle, and a row of five buttons at the bottom. Single dark look. */
+:root{
+  --bg:#10141a; --panel:#18202a; --line:#2a3544; --fg:#e9edf2; --dim:#8996a8;
+  --accent:#f2b134; --accent-ink:#1a1305; --danger:#ea5a5f; --good:#46d695;
+  --p1:#4cc9f0; --p2:#f2b134;
+  --font-display:'Big Shoulders Display','Arial Narrow',Impact,sans-serif;
+  --font-ui:'Hanken Grotesk',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
+  --font-mono:'Spline Sans Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%; margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 var(--font-ui); overscroll-behavior:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+#app{height:100%; display:flex; flex-direction:column; gap:12px; max-width:560px; margin:0 auto;
+  padding-top:max(12px,env(safe-area-inset-top,0px)); padding-bottom:max(12px,env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:flex; justify-content:space-between; align-items:center; gap:12px; flex:none}
+.chip{display:flex; align-items:center; gap:10px; font:800 22px/1 var(--font-display); letter-spacing:.06em; text-transform:uppercase}
+.chip i{width:10px; height:22px; border-radius:3px; background:var(--c,var(--dim))}
+.net{font:600 12px var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--dim); display:flex; gap:6px; align-items:center}
+.net i{width:8px; height:8px; border-radius:50%; background:var(--danger); display:inline-block}
+.net.on i{background:var(--good)}
+main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
+.msg{display:flex; flex-direction:column; gap:8px; padding-top:8vh}
+.msg h1{margin:0; font:900 44px/1 var(--font-display); text-transform:uppercase; letter-spacing:.02em; text-wrap:balance}
+.msg p{margin:0; color:var(--dim); font-size:16px; max-width:34ch}
+.actions{display:flex; flex-direction:column; gap:10px; margin-top:auto}
+.btn{min-height:64px; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); font:700 18px var(--font-ui); touch-action:manipulation}
+.btn.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+.btn.small{min-height:48px; font-size:15px; color:var(--dim)}
+.btn:active{filter:brightness(.9)}
+.btn:focus-visible,.key:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+#surface{flex:1; min-height:0; border:1px solid var(--line); border-radius:14px; background:var(--panel); touch-action:none; position:relative; display:flex; align-items:center; justify-content:center; padding:16px; text-align:center}
+#surface.touch{border-color:var(--c,var(--accent))}
+.hint{color:var(--dim); font-size:15px; max-width:26ch; pointer-events:none}
+#flash{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 64px var(--font-display); text-transform:uppercase; letter-spacing:.04em; color:var(--c,var(--accent)); opacity:0; pointer-events:none}
+#flash.show{opacity:.9; transition:none}
+#flash.fade{opacity:0; transition:opacity .25s}
+.pad{display:flex; gap:8px; flex:none}
+.key{flex:1; height:64px; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); display:flex; align-items:center; justify-content:center; touch-action:none; padding:0}
+.key svg{width:26px; height:26px; stroke:currentColor; fill:none; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; pointer-events:none}
+.key.down{background:var(--line)}
+.key.drop{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="chip" id="chip"><i></i><span id="chipTxt">Connecting</span></div>
+    <div class="net" id="net"><i></i><span id="netTxt">Offline</span></div>
+  </header>
+  <main>
+    <div class="msg" id="msg">
+      <h1 id="title">Connecting</h1>
+      <p id="sub"></p>
+    </div>
+    <div class="actions" id="actions" hidden>
+      <button class="btn primary" id="readyBtn">Ready</button>
+      <button class="btn small" id="soloBtn" hidden>Play on my own</button>
+    </div>
+    <div id="surface" hidden>
+      <div class="hint" id="surfHint">Drag sideways to move. Tap to rotate. Flick straight down to drop.</div>
+      <div id="flash"></div>
+    </div>
+  </main>
+  <div class="pad" id="pad" hidden>
+    <button class="key" id="kL" aria-label="Move left"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="key" id="kD" aria-label="Soft drop"><svg viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg></button>
+    <button class="key" id="kR" aria-label="Move right"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    <button class="key" id="kU" aria-label="Rotate"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button>
+    <button class="key drop" id="kH" aria-label="Hard drop"><svg viewBox="0 0 24 24"><path d="M6 5l6 6 6-6"/><path d="M6 13l6 6 6-6"/></svg></button>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+function $(s){return document.querySelector(s);}
+var SEATCOL=['var(--p1)','var(--p2)'];
+var ws=null, seat=-1, retry=0, noRetry=false, alive=false;
+var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false};
+
+/* a stable id so a refresh keeps the same seat */
+var myId='';
+try{myId=localStorage.getItem('bd-pad-id')||'';}catch(e){}
+if(!myId){
+  myId=Math.random().toString(36).slice(2)+Date.now().toString(36);
+  try{localStorage.setItem('bd-pad-id',myId);}catch(e){}
+}
+
+function setNet(on){$('#net').className='net'+(on?' on':'');$('#netTxt').textContent=on?'Live':'Offline';}
+function vibe(ms){try{if(navigator.vibrate)navigator.vibrate(ms);}catch(e){}}
+
+function connect(){
+  clearTimeout(retry);
+  if(noRetry)return;
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onopen=function(){alive=true;setNet(true);ws.send(JSON.stringify({t:'hello',role:'pad',id:myId}));render();};
+  ws.onmessage=function(e){
+    var m; try{m=JSON.parse(e.data);}catch(x){return;}
+    if(m.t==='seat'){seat=m.seat;render();}
+    else if(m.t==='tv'&&m.m){S=m.m;render();}
+    else if(m.t==='full'){noRetry=true;seat=-2;render();}
+  };
+  ws.onclose=function(ev){
+    alive=false;setNet(false);
+    if(ev&&ev.code===4001){noRetry=true;seat=-3;}
+    render();
+    if(!noRetry)retry=setTimeout(connect,1000);
+  };
+  ws.onerror=function(){try{ws.close();}catch(x){}};
+}
+function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
+function key(k){sendMsg({t:'in',k:k});}
+
+/* ---------------------------------------------------------- screens */
+function show(el,on){el.hidden=!on;}
+function render(){
+  var c=seat===0||seat===1?SEATCOL[seat]:'var(--dim)';
+  document.documentElement.style.setProperty('--c',c);
+  $('#chipTxt').textContent=seat===0||seat===1?'Player '+(seat+1):'Block Duel';
+  var title='', sub='', btn='', showReady=false, showSolo=false, playing=false;
+  var other=seat===0?1:0;
+  if(seat===-2){title='Both seats are taken';sub='Two phones are already connected. Close this page on one of them, then reload.';}
+  else if(seat===-3){title='Seat taken';sub='This seat was taken by another browser on your phone. Close the other tab, then reload this page.';}
+  else if(seat<0||!alive){title=alive?'Joining':'Reconnecting';sub='Make sure this phone is on the same Wi-Fi as the TV.';}
+  else if(S.phase==='countdown'||S.phase==='playing'){playing=true;}
+  else if(S.phase==='result'){
+    showReady=true; showSolo=false;
+    if(S.solo){title='Game over';sub='Nice run.';btn='Play again';}
+    else{
+      title=S.winner===seat?'You won':'You lost';
+      sub='Wins: you '+S.wins[seat]+', player '+(other+1)+' '+S.wins[other]+'.';
+      btn=S.ready[seat]?'Not ready':'Rematch';
+      if(S.ready[seat])sub+=' Waiting for player '+(other+1)+'.';
+      if(!S.conn[other]){sub+=' Player '+(other+1)+' has left. You can play on your own.';showSolo=true;}
+    }
+  }else{
+    showReady=true;
+    var oc=S.conn[other], mine=S.ready[seat];
+    if(!oc){title='Waiting for player '+(other+1);sub='Open this page on the other phone. You can also start a practice run.';showSolo=true;}
+    else if(mine){title='Waiting for player '+(other+1);sub='You are ready.';}
+    else{title='Ready?';sub=S.ready[other]?'Player '+(other+1)+' is ready.':'Tap Ready when you are set.';}
+    btn=mine?'Not ready':'Ready';
+  }
+  $('#title').textContent=title; $('#sub').textContent=sub;
+  show($('#msg'),!playing);
+  show($('#actions'),showReady);
+  $('#readyBtn').textContent=btn;
+  show($('#soloBtn'),showSolo);
+  show($('#surface'),playing);
+  show($('#pad'),playing);
+  $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick straight down to drop.';
+}
+$('#readyBtn').addEventListener('click',function(){
+  var now=!!(S.ready&&S.ready[seat]);
+  if(S.phase==='result'&&S.solo){sendMsg({t:'ready',v:true,solo:true});return;}
+  sendMsg({t:'ready',v:!now});
+});
+$('#soloBtn').addEventListener('click',function(){sendMsg({t:'ready',v:true,solo:true});});
+
+/* ---------------------------------------------------------- buttons */
+function hold(btn,k,delay,every){
+  var t1=0,t2=0;
+  function stop(){clearTimeout(t1);clearInterval(t2);btn.classList.remove('down');}
+  btn.addEventListener('pointerdown',function(e){
+    e.preventDefault();
+    try{btn.setPointerCapture(e.pointerId);}catch(x){}
+    btn.classList.add('down'); key(k);
+    if(k==='H')vibe(14);
+    if(every){t1=setTimeout(function(){t2=setInterval(function(){key(k);},every);},delay);}
+  });
+  ['pointerup','pointercancel','lostpointercapture'].forEach(function(ev){btn.addEventListener(ev,stop);});
+  btn.addEventListener('contextmenu',function(e){e.preventDefault();});
+}
+hold($('#kL'),'L',150,48);
+hold($('#kR'),'R',150,48);
+hold($('#kD'),'D',0,42);
+hold($('#kU'),'U',0,0);
+hold($('#kH'),'H',0,0);
+
+/* ---------------------------------------------------------- swipe */
+var surf=$('#surface'), flashEl=$('#flash'), sw=null, flashT=0;
+function flash(txt){
+  flashEl.textContent=txt; flashEl.className='show';
+  clearTimeout(flashT);
+  flashT=setTimeout(function(){flashEl.className='fade';},60);
+}
+surf.addEventListener('pointerdown',function(e){
+  e.preventDefault();
+  try{surf.setPointerCapture(e.pointerId);}catch(x){}
+  surf.classList.add('touch');
+  var now=performance.now();
+  sw={id:e.pointerId,x0:e.clientX,y0:e.clientY,ax:e.clientX,ay:e.clientY,t0:now,mode:'',hist:[{t:now,y:e.clientY}]};
+});
+surf.addEventListener('pointermove',function(e){
+  if(!sw||e.pointerId!==sw.id)return;
+  var now=performance.now();
+  sw.hist.push({t:now,y:e.clientY});
+  while(sw.hist.length>2&&now-sw.hist[0].t>160)sw.hist.shift();
+  if(!sw.mode){
+    var tx=e.clientX-sw.x0, ty=e.clientY-sw.y0;
+    if(Math.hypot(tx,ty)<14)return;
+    sw.mode=(ty>0&&ty>Math.abs(tx)*1.15)?'v':'h';
+    sw.ax=e.clientX; sw.ay=e.clientY;
+  }
+  var hs=26, vs=34;
+  var dx=e.clientX-sw.ax, dy=e.clientY-sw.ay;
+  if(sw.mode==='h'){
+    while(dx>=hs){key('R');sw.ax+=hs;dx-=hs;}
+    while(dx<=-hs){key('L');sw.ax-=hs;dx+=hs;}
+  }
+  while(dy>=vs){key('D');sw.ay+=vs;dy-=vs;}
+});
+function swEnd(e){
+  surf.classList.remove('touch');
+  if(!sw||e.pointerId!==sw.id)return;
+  var s=sw; sw=null;
+  if(e.type==='pointercancel')return;
+  var dx=e.clientX-s.x0, dy=e.clientY-s.y0, dt=Math.max(1,performance.now()-s.t0);
+  if(Math.hypot(dx,dy)<12&&dt<300){key('U');flash('Turn');return;}
+  var h0=s.hist[0], vy=(e.clientY-h0.y)/Math.max(1,performance.now()-h0.t);
+  if(s.mode==='v'&&dy>60&&vy>0.65){key('H');flash('Drop');vibe(14);}
+}
+surf.addEventListener('pointerup',swEnd);
+surf.addEventListener('pointercancel',swEnd);
+surf.addEventListener('contextmenu',function(e){e.preventDefault();});
+document.addEventListener('gesturestart',function(e){e.preventDefault();});
+
+render();
+connect();
+})();
+</script>
+</body>
+</html>
