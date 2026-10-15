@@ -37,6 +37,14 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
 .btn{min-height:64px; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); font:700 18px var(--font-ui); touch-action:manipulation}
 .btn.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent}
 .btn.small{min-height:48px; font-size:15px; color:var(--dim)}
+.cpu{display:flex; flex-direction:column; gap:8px}
+.cpu .lbl{font:600 12px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim)}
+.cpu div{display:grid; grid-template-columns:repeat(3,1fr); gap:8px}
+.cpu .btn{color:var(--fg)}
+.rules{display:grid; grid-template-columns:auto 1fr 1fr; gap:8px; align-items:center}
+.rules .lbl{font:600 12px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim); padding-right:4px}
+.rules .btn[aria-pressed="true"]{color:var(--fg); border-color:var(--c,var(--accent)); background:var(--line)}
+.rules-note{margin:0; color:var(--dim); font-size:14px}
 .btn:active{filter:brightness(.9)}
 .btn:focus-visible,.key:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 #surface{flex:1; min-height:0; border:1px solid var(--line); border-radius:14px; background:var(--panel); touch-action:none; position:relative; display:flex; align-items:center; justify-content:center; padding:16px; text-align:center}
@@ -59,7 +67,16 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
       <p id="sub"></p>
     </div>
     <div class="actions" id="actions" hidden>
+      <div class="rules" id="rulesRow">
+        <span class="lbl">Rules</span>
+        <button class="btn small" data-rules="ko" aria-pressed="false">KO</button><button class="btn small" data-rules="classic" aria-pressed="false">Classic</button>
+      </div>
+      <p class="rules-note" id="rulesNote"></p>
       <button class="btn primary" id="readyBtn">Ready</button>
+      <div class="cpu" id="cpuRow" hidden>
+        <span class="lbl">Play the computer</span>
+        <div><button class="btn small" data-cpu="easy">Easy</button><button class="btn small" data-cpu="normal">Normal</button><button class="btn small" data-cpu="hard">Hard</button></div>
+      </div>
       <button class="btn small" id="soloBtn" hidden>Play on my own</button>
     </div>
     <div id="surface" hidden>
@@ -75,7 +92,7 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
 function $(s){return document.querySelector(s);}
 var SEATCOL=['var(--p1)','var(--p2)'];
 var ws=null, seat=-1, retry=0, noRetry=false, alive=false;
-var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false};
+var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false,cpu:null,rules:'ko',kos:null};
 
 /* a stable id so a refresh keeps the same seat */
 var myId='';
@@ -114,7 +131,7 @@ function connect(){
   ws.onmessage=function(e){
     var m; try{m=JSON.parse(e.data);}catch(x){return;}
     if(m.t==='seat'){seat=m.seat;render();}
-    else if(m.t==='tv'&&m.m){S=m.m;render();}
+    else if(m.t==='tv'&&m.m){onKos(S.kos,m.m.kos);S=m.m;render();}
     else if(m.t==='full'){noRetry=true;seat=-2;render();}
   };
   ws.onclose=function(ev){
@@ -129,6 +146,14 @@ function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
 var BUZZ={L:8,R:8,D:5,U:12,C:[10,40,10],H:[28,30,16]};
 function key(k){sendMsg({t:'in',k:k});vibe(BUZZ[k]||8);}
 
+/* a KO shows on the swipe surface; the phone that got knocked out also buzzes */
+function onKos(a,b){
+  if(!a||!b||seat<0)return;
+  var other=seat===0?1:0;
+  if(b[other]>a[other]){flash('KO');vibe([60,40,60]);}
+  else if(b[seat]>a[seat])flash('KO');
+}
+
 /* ---------------------------------------------------------- screens */
 function show(el,on){el.hidden=!on;}
 function render(){
@@ -140,12 +165,19 @@ function render(){
   if(seat===-2){title='Both seats are taken';sub='Two phones are already connected. Close this page on one of them, then reload.';}
   else if(seat===-3){title='Seat taken';sub='This seat was taken by another browser on your phone. Close the other tab, then reload this page.';}
   else if(seat<0||!alive){title=alive?'Joining':'Reconnecting';sub='Make sure this phone is on the same Wi-Fi as the TV.';}
+  else if((S.phase==='countdown'||S.phase==='playing')&&S.cpu&&S.cpu.seat===seat){title='Match in progress';sub='Player '+(other+1)+' is playing the computer. You can join when it ends.';}
   else if(S.phase==='countdown'||S.phase==='playing'){playing=true;}
-  else if(S.phase==='result'){
+  else if(S.phase==='result'&&!(S.cpu&&S.cpu.seat===seat)){
     showReady=true; showSolo=false;
     if(S.solo){title='Game over';sub='Nice run.';btn='Play again';}
+    else if(S.cpu&&S.cpu.seat!==seat){
+      title=S.winner===seat?'You won':(S.winner===-1?'Draw':'You lost');
+      sub='Wins: you '+S.wins[seat]+', computer '+S.wins[S.cpu.seat]+'.';
+      btn=S.conn[other]?(S.ready[seat]?'Not ready':'Ready'):'Rematch'; showSolo=!S.conn[other];
+      if(S.conn[other])sub+=' Player '+(other+1)+' has joined. Tap Ready to play them.';
+    }
     else{
-      title=S.winner===seat?'You won':'You lost';
+      title=S.winner===seat?'You won':(S.winner===-1?'Draw':'You lost');
       sub='Wins: you '+S.wins[seat]+', player '+(other+1)+' '+S.wins[other]+'.';
       btn=S.ready[seat]?'Not ready':'Rematch';
       if(S.ready[seat])sub+=' Waiting for player '+(other+1)+'.';
@@ -154,7 +186,7 @@ function render(){
   }else{
     showReady=true;
     var oc=S.conn[other], mine=S.ready[seat];
-    if(!oc){title='Waiting for player '+(other+1);sub='Open this page on the other phone. You can also start a practice run.';showSolo=true;}
+    if(!oc){title='Waiting for player '+(other+1);sub='Open this page on the other phone, or play the computer or a practice run.';showSolo=true;}
     else if(mine){title='Waiting for player '+(other+1);sub='You are ready.';}
     else{title='Ready?';sub=S.ready[other]?'Player '+(other+1)+' is ready.':'Tap Ready when you are set.';}
     btn=mine?'Not ready':'Ready';
@@ -164,15 +196,27 @@ function render(){
   show($('#actions'),showReady);
   $('#readyBtn').textContent=btn;
   show($('#soloBtn'),showSolo);
+  show($('#cpuRow'),showSolo);
+  var showRules=showReady&&!(S.phase==='result'&&S.solo);
+  show($('#rulesRow'),showRules); show($('#rulesNote'),showRules);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-rules')===(S.rules||'ko')));});
+  $('#rulesNote').textContent=S.rules==='classic'?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs, or most KOs in 3 minutes.';
   show($('#surface'),playing);
   $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.';
 }
 $('#readyBtn').addEventListener('click',function(){
   var now=!!(S.ready&&S.ready[seat]);
   if(S.phase==='result'&&S.solo){sendMsg({t:'ready',v:true,solo:true});return;}
+  if(S.phase==='result'&&S.cpu&&S.cpu.seat!==seat&&!S.conn[1-seat]){sendMsg({t:'ready',v:true,cpu:S.cpu.level});return;}
   sendMsg({t:'ready',v:!now});
 });
 $('#soloBtn').addEventListener('click',function(){sendMsg({t:'ready',v:true,solo:true});});
+Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
+  b.addEventListener('click',function(){sendMsg({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
+});
+Array.prototype.forEach.call(document.querySelectorAll('[data-cpu]'),function(b){
+  b.addEventListener('click',function(){sendMsg({t:'ready',v:true,cpu:b.getAttribute('data-cpu')});});
+});
 
 /* ---------------------------------------------------------- swipe */
 var surf=$('#surface'), flashEl=$('#flash'), sw=null, flashT=0;

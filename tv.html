@@ -57,6 +57,8 @@ h1,h2{margin:0}
 .bar h2 span{color:var(--accent)}
 .tally{font:600 1.1rem var(--font-mono); letter-spacing:.08em; padding-right:9rem}
 .tally b{font-size:1.5rem}
+.clock{font:600 1.8rem var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:.06em}
+.clock.low{color:var(--danger)}
 .field{flex:1; min-height:0; display:flex; justify-content:center; align-items:center; gap:4rem}
 .panel{display:flex; flex-direction:column; gap:.5rem; position:relative}
 .who{font:800 1.5rem/1 var(--font-display); text-transform:uppercase; letter-spacing:.06em; display:flex; align-items:center; gap:.7rem}
@@ -110,12 +112,13 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
   <section class="seats">
     <div class="seat" id="seat0" style="--c:var(--p1)"><div class="chip"></div><div class="who">Player 1</div><div class="st">Waiting for a phone</div></div>
     <div class="seat" id="seat1" style="--c:var(--p2)"><div class="chip"></div><div class="who">Player 2</div><div class="st">Waiting for a phone</div></div>
-    <p class="hint">The match starts when both players are ready. One phone alone can start a practice run.</p>
+    <p class="hint" id="rules"></p>
+    <p class="hint">The match starts when both players are ready. One phone alone can start a practice run or play the computer.</p>
   </section>
 </main>
 
 <main id="match" hidden>
-  <header class="bar"><h2>Block <span>Duel</span></h2><div class="tally" id="tally"></div></header>
+  <header class="bar"><h2>Block <span>Duel</span></h2><div class="clock" id="clock" hidden></div><div class="tally" id="tally"></div></header>
   <div class="field" id="field"></div>
 </main>
 <div id="snd">Click this screen once to turn on sound</div>
@@ -131,14 +134,18 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 'use strict';
 var COLS=10, ROWS=20, LOCK_MS=500, COUNTDOWN=3000, FORFEIT_MS=10000;
 /* Pacing knobs. Garbage sent by lines cleared (index = lines): a single sends nothing, a double 1, a triple 1, a Tetris 3.
-   Incoming garbage lands at most GARBAGE_PER_LOCK rows at a time, the queue is capped at GARBAGE_CAP, and speed rises slowly. */
-var GARBAGE_TABLE=[0,0,1,1,3], GARBAGE_PER_LOCK=4, GARBAGE_CAP=10, LEVEL_EVERY_LINES=8, LEVEL_EVERY_MS=90000, GRAVITY_START=800, GRAVITY_STEP=55, GRAVITY_MIN=100;
+   Incoming garbage lands at most GARBAGE_PER_LOCK rows at a time, the queue is capped at GARBAGE_CAP, and speed rises slowly.
+   Incoming garbage waits GARBAGE_DELAY_MS before it can land (as in TETR.IO), so there is time to clear lines and cancel it. */
+/* KO rules (Tetris Friends style): topping out clears your board after KO_RESPAWN_MS and gives the other player a KO.
+   First to KO_TO_WIN wins; when MATCH_MS runs out, most KOs wins, then most garbage sent, otherwise it is a draw. */
+var KO_TO_WIN=3, MATCH_MS=180000, KO_RESPAWN_MS=1600;
+var GARBAGE_TABLE=[0,0,1,1,3], GARBAGE_PER_LOCK=4, GARBAGE_CAP=10, GARBAGE_DELAY_MS=1500, LEVEL_EVERY_LINES=8, LEVEL_EVERY_MS=90000, GRAVITY_START=800, GRAVITY_STEP=55, GRAVITY_MIN=100;
 function $(s){return document.querySelector(s);}
 var css=getComputedStyle(document.documentElement);
 function tok(n){return css.getPropertyValue(n).trim();}
 var PAL=[null,tok('--p1'),tok('--p2'),tok('--p3'),tok('--p4'),tok('--p5'),tok('--p6'),tok('--p7'),tok('--p8')];
 var SEATCOL=[tok('--p1'),tok('--p2')];
-var C_BOARD=tok('--board'), C_GRID=tok('--gridline'), C_DANGER=tok('--danger'), C_SHINE=tok('--shine'), C_SHADE=tok('--shade'), C_FG=tok('--fg');
+var C_BOARD=tok('--board'), C_GRID=tok('--gridline'), C_DANGER=tok('--danger'), C_SHINE=tok('--shine'), C_SHADE=tok('--shade'), C_FG=tok('--fg'), C_SCRIM=tok('--scrim');
 
 /* ------------------------------------------------------------- engine */
 var SHAPES={
@@ -159,7 +166,7 @@ function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a
 function Game(seed){
   this.board=[]; for(var r=0;r<ROWS;r++)this.board.push(new Array(COLS).fill(0));
   this.rng=mulberry32(seed); this.bag=[]; this.queue=[]; this.cur=null;
-  this.pending=0; this.lines=0; this.sent=0; this.over=false; this.level=1;
+  this.pending=0; this.incoming=[]; this.lines=0; this.sent=0; this.over=false; this.level=1;
   this.lastFall=0; this.groundAt=null; this.resets=0; this.fx=null; this.started=false;
   this.held=null; this.canHold=true; this.sfx=function(){};
   this.onSend=function(){}; this.onOver=function(){};
@@ -175,15 +182,16 @@ Game.prototype.refill=function(){
     this.queue.push(this.bag.pop());
   }
 };
-Game.prototype.collide=function(m,x,y){
+function collideOn(board,m,x,y){
   for(var r=0;r<m.length;r++)for(var c=0;c<m[r].length;c++){
     if(!m[r][c])continue;
     var nx=x+c, ny=y+r;
     if(nx<0||nx>=COLS||ny>=ROWS)return true;
-    if(ny>=0&&this.board[ny][nx])return true;
+    if(ny>=0&&board[ny][nx])return true;
   }
   return false;
-};
+}
+Game.prototype.collide=function(m,x,y){return collideOn(this.board,m,x,y);};
 Game.prototype.spawn=function(forced){
   var t=forced;
   if(!t){this.refill(); t=this.queue.shift(); this.refill();}
@@ -221,6 +229,19 @@ Game.prototype.hard=function(){
   this.sfx('hard',c.y-y0);
   this.lock();
 };
+Game.prototype.receive=function(n){
+  n=Math.min(n,GARBAGE_CAP-this.pending); if(n<=0)return;
+  this.incoming.push({n:n,t:performance.now()}); this.pending+=n;
+};
+Game.prototype.cancel=function(n){        /* oldest garbage goes first; returns what is left over */
+  while(n>0&&this.incoming.length){var e=this.incoming[0], k=Math.min(n,e.n); e.n-=k; n-=k; this.pending-=k; if(!e.n)this.incoming.shift();}
+  return n;
+};
+Game.prototype.armed=function(){          /* rows whose delay has run out */
+  var now=performance.now(), a=0;
+  this.incoming.forEach(function(e){if(now-e.t>=GARBAGE_DELAY_MS)a+=e.n;});
+  return a;
+};
 Game.prototype.addGarbage=function(k){
   var topOut=false, hole=Math.floor(Math.random()*COLS);   /* one shared hole per batch: easier to dig, so games run longer */
   for(var i=0;i<k;i++){
@@ -246,20 +267,25 @@ Game.prototype.lock=function(){
   this.board=kept;
   if(n){
     this.lines+=n;
-    var s=GARBAGE_TABLE[n]||GARBAGE_TABLE[GARBAGE_TABLE.length-1], cancel=Math.min(s,this.pending);
-    this.pending-=cancel; s-=cancel;
+    var s=this.cancel(GARBAGE_TABLE[Math.min(n,GARBAGE_TABLE.length-1)]);
     if(s>0){this.sent+=s; this.onSend(s);}
     this.sfx('clear',n);
   }else{
     this.sfx('lock');
-    if(this.pending>0){
-      var g=Math.min(this.pending,GARBAGE_PER_LOCK); this.pending-=g;
+    var g=Math.min(this.armed(),GARBAGE_PER_LOCK);
+    if(g>0){
+      this.cancel(g);
       this.sfx('garbage',g);
       if(this.addGarbage(g)){this.die();return;}
     }
   }
   this.canHold=true;
   if(!this.spawn())this.die();
+};
+Game.prototype.revive=function(){
+  for(var r=0;r<ROWS;r++)this.board[r].fill(0);
+  this.incoming=[]; this.pending=0; this.held=null; this.canHold=true; this.fx=null;
+  this.over=false; this.koUntil=0; this.spawn();
 };
 Game.prototype.die=function(){
   if(this.over)return;
@@ -286,6 +312,98 @@ Game.prototype.tick=function(ts,t0){
     if(this.groundAt==null)this.groundAt=ts;
     else if(ts-this.groundAt>=LOCK_MS)this.lock();
   }else this.groundAt=null;
+};
+
+/* ------------------------------------------------------------- computer player */
+/* The bot tries every rotation and column for its piece (and for the hold piece), scores each resulting board on height, holes and
+   bumpiness, then plays the best spot through the same inputs a phone sends, one step at a time. When its stack is low it leaves the
+   right-hand column open and holds out for multi-line clears, because singles send nothing. Difficulty sets how quickly it thinks and
+   moves, and how often it settles for a worse spot. */
+var CPU={
+  easy:  {think:700,step:190,slip:0.35,hold:false,greed:0},
+  normal:{think:380,step:110,slip:0.12,hold:true, greed:0.6},
+  hard:  {think:170,step:55, slip:0,   hold:true, greed:1}
+};
+var CPU_NAME={easy:'Easy',normal:'Normal',hard:'Hard'};
+/* Board score: El-Tetris weights (landing height, rows cleared, row and column transitions, holes, wells). */
+function evalBoard(b,n,land,greed){
+  var rowT=0, colT=0, holes=0, wells=0, max=0, r, c;
+  for(r=0;r<ROWS;r++){
+    var prev=1;
+    for(c=0;c<COLS;c++){var f=b[r][c]?1:0; if(f!==prev)rowT++; prev=f;}
+    if(!prev)rowT++;
+  }
+  for(c=0;c<COLS;c++){
+    var above=0, seen=false;
+    for(r=0;r<ROWS;r++){
+      var v=b[r][c]?1:0;
+      if(v&&!seen){seen=true; if(ROWS-r>max)max=ROWS-r;}
+      if(v!==above)colT++;
+      if(!v&&seen)holes++;
+      above=v;
+    }
+    if(!above)colT++;
+  }
+  var well=greed>0&&max+n<=9;               /* stack is low: keep the right-hand column open and hold out for multi-line clears */
+  for(c=0;c<COLS;c++){
+    if(well&&c===COLS-1)continue;
+    var depth=0;
+    for(r=0;r<ROWS;r++){
+      var l=c===0||b[r][c-1], rt=c===COLS-1||b[r][c+1];
+      if(!b[r][c]&&l&&rt){depth++; wells+=depth;}else if(b[r][c])break;else depth=0;
+    }
+  }
+  var s=-4.5*land+3.42*n-3.22*rowT-9.35*colT-7.9*holes-3.39*wells;
+  if(well){
+    var h9=0; for(r=0;r<ROWS;r++)if(b[r][COLS-1]){h9=ROWS-r;break;}
+    s+=greed*([0,-14,-10,4,40][n]-6*h9);
+  }
+  return s;
+}
+function placements(board,t,greed){
+  var m=SHAPES[t].map(function(r){return r.slice();}), out=[], spins=t==='O'?1:4;
+  for(var k=0;k<spins;k++){
+    var top=0; while(!m[top].some(function(v){return v;}))top++;
+    var bot=m.length-1; while(!m[bot].some(function(v){return v;}))bot--;
+    for(var x=-2;x<COLS;x++){
+      if(collideOn(board,m,x,0))continue;
+      var y=0; while(!collideOn(board,m,x,y+1))y++;
+      var b=board.map(function(row){return row.slice();}), r, c;
+      for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c])b[y+r][x+c]=1;
+      var kept=b.filter(function(row){return !row.every(function(v){return v;});}), n=ROWS-kept.length;
+      while(kept.length<ROWS)kept.unshift(new Array(COLS).fill(0));
+      out.push({m:m,x:x,s:evalBoard(kept,n,ROWS-(y+(top+bot)/2),greed)});
+    }
+    m=rot(m);
+  }
+  return out;
+}
+function sameMat(a,b){return a.length===b.length&&a.every(function(row,r){return row.every(function(v,c){return v===b[r][c];});});}
+function Bot(g,level){this.g=g;this.cfg=CPU[level];this.piece=null;this.plan=null;this.next=0;}
+Bot.prototype.pick=function(t){
+  var list=placements(this.g.board,t,this.cfg.greed); if(!list.length)return null;
+  list.sort(function(a,b){return b.s-a.s;});
+  if(this.cfg.slip&&Math.random()<this.cfg.slip)return list[Math.floor(Math.random()*Math.min(4,list.length))];
+  return list[0];
+};
+Bot.prototype.decide=function(){
+  var g=this.g, best=this.pick(g.cur.t);
+  if(this.cfg.hold&&g.canHold){
+    var alt=g.held||g.queue[0];
+    if(alt&&alt!==g.cur.t){var b2=this.pick(alt); if(b2&&(!best||b2.s>best.s+0.5))return {hold:true};}
+  }
+  return best?{m:best.m,x:best.x,spins:0}:{m:g.cur.m,x:g.cur.x,spins:0};
+};
+Bot.prototype.tick=function(ts){
+  var g=this.g; if(g.over)return;
+  if(g.cur!==this.piece){this.piece=g.cur;this.plan=this.decide();this.next=ts+this.cfg.think*(0.7+Math.random()*0.6);return;}
+  if(ts<this.next)return;
+  this.next=ts+this.cfg.step*(0.8+Math.random()*0.4);
+  var p=this.plan, c=g.cur;
+  if(p.hold){p.hold=false;g.apply('C');return;}
+  if(!sameMat(c.m,p.m)&&p.spins<4){p.spins++;g.apply('U');return;}
+  if(c.x!==p.x){var x0=c.x;g.apply(c.x<p.x?'R':'L');if(c.x!==x0)return;}
+  g.apply('H');
 };
 
 /* ------------------------------------------------------------- sound */
@@ -346,6 +464,7 @@ var SFX=(function(){
       case 'tick': tone(NOTE.a4,NOTE.a4,0.12,'square',0.08,0); break;
       case 'go': tone(NOTE.a4*2,NOTE.a4*2,0.35,'square',0.1,0); break;
       case 'win': [NOTE.c5,NOTE.e5,NOTE.g5,NOTE.c6].forEach(function(f,i){tone(f,f,0.22,'triangle',0.2,0,i*0.11);}); tone(NOTE.c6,NOTE.c6,0.5,'triangle',0.2,0,0.5); break;
+      case 'ko': tone(420,70,0.5,'sawtooth',0.18,pan); noise(0.35,0.22,pan,1200); break;
       case 'lose': [NOTE.e4,NOTE.c4].forEach(function(f,i){tone(f*1.2,f*0.9,0.3,'sawtooth',0.12,0,i*0.22);}); break;
     }
   }
@@ -358,17 +477,18 @@ var SFX=(function(){
 
 /* ------------------------------------------------------------- panels */
 var panels=[null,null], cs=24;
-function buildPanel(i){
+function buildPanel(i,name){
   var el=document.createElement('section');
   el.className='panel';
   el.style.setProperty('--c',SEATCOL[i]);
-  el.innerHTML='<div class="who"><i></i><span>Player '+(i+1)+'</span><em>Reconnecting</em></div>'+
+  el.innerHTML='<div class="who"><i></i><span>'+name+'</span><em>Reconnecting</em></div>'+
     '<div class="row"><canvas class="board"></canvas>'+
     '<div class="side"><div class="blk"><div class="lbl">Hold</div><canvas class="hld"></canvas></div><div class="blk"><div class="lbl">Next</div><canvas class="nxt"></canvas></div>'+
     '<div class="blk"><div class="stat"><span class="lbl">Level</span><b class="lv">1</b></div>'+
     '<div class="stat"><span class="lbl">Lines</span><b class="ln">0</b></div>'+
-    '<div class="stat"><span class="lbl">Sent</span><b class="sn">0</b></div></div></div></div>';
-  var p={el:el,board:el.querySelector('canvas.board'),nxt:el.querySelector('canvas.nxt'),hld:el.querySelector('canvas.hld'),lv:el.querySelector('.lv'),ln:el.querySelector('.ln'),sn:el.querySelector('.sn'),shown:''};
+    '<div class="stat"><span class="lbl">Sent</span><b class="sn">0</b></div>'+
+    '<div class="stat" hidden><span class="lbl">KOs</span><b class="kn">0</b></div></div></div></div>';
+  var p={el:el,board:el.querySelector('canvas.board'),nxt:el.querySelector('canvas.nxt'),hld:el.querySelector('canvas.hld'),lv:el.querySelector('.lv'),ln:el.querySelector('.ln'),sn:el.querySelector('.sn'),kn:el.querySelector('.kn'),shown:''};
   return p;
 }
 function setCanvas(cv,w,h){
@@ -423,9 +543,10 @@ function drawBoard(p,g){
       if(cur.m[r][c]&&cur.y+r>=0)cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,PAL[IDS[cur.t]]);
     }
   }
-  if(g.pending>0){
-    var ph=Math.min(g.pending,ROWS)*cs;
-    ctx.fillStyle=C_DANGER; ctx.fillRect(0,cv._h-ph,Math.max(4,cs*0.18),ph);
+  if(g.pending>0){                          /* garbage meter: solid once it can land, faint while it is still on its way */
+    var ph=Math.min(g.pending,ROWS)*cs, ah=Math.min(g.armed(),ROWS)*cs, mw=Math.max(4,cs*0.18);
+    ctx.fillStyle=C_DANGER; ctx.globalAlpha=0.4; ctx.fillRect(0,cv._h-ph,mw,ph-ah);
+    ctx.globalAlpha=1; ctx.fillRect(0,cv._h-ah,mw,ah);
   }
   if(g.fx){
     var age=performance.now()-g.fx.t;
@@ -447,6 +568,13 @@ function drawBoard(p,g){
       ctx.globalAlpha=1;
     }
   }
+}
+function drawKO(p){
+  var cv=p.board, ctx=cv.getContext('2d');
+  ctx.fillStyle=C_SCRIM; ctx.fillRect(0,0,cv._w,cv._h);
+  ctx.fillStyle=C_DANGER; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='900 '+Math.round(cs*4)+'px '+tok('--font-display');
+  ctx.fillText('KO',cv._w/2,cv._h/2);
 }
 function drawNext(p,g){
   var cv=p.nxt, ctx=cv.getContext('2d'), s=p.ns;
@@ -479,8 +607,10 @@ function drawEmptyBoard(p){
 /* ------------------------------------------------------------- network */
 var ws=null, wsTimer=0;
 var phase='lobby';                 /* lobby, countdown, playing, result */
-var games=[null,null], match=null;
+var games=[null,null], bots=[null,null], match=null, lastKind='';
 var ready=[false,false], conn=[false,false], wins=[0,0], forfeit=[0,0];
+var rules='ko';                    /* 'ko' or 'classic', picked on either phone */
+try{if(localStorage.getItem('bd-rules')==='classic')rules='classic';}catch(e){}
 
 function setNet(on){
   $('#net').className=on?'on':'';
@@ -488,7 +618,7 @@ function setNet(on){
 }
 function bcState(){
   if(!ws||ws.readyState!==1)return;
-  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo)}}));
+  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,kos:match&&match.ko?match.kos.slice():null}}));
 }
 function connect(){
   clearTimeout(wsTimer);
@@ -511,13 +641,13 @@ function onSeats(list){
     var was=conn[i];
     conn[i]=!!(list[i]&&list[i].connected);
     if(!conn[i]&&was){ready[i]=false;}
-    var inMatch=match&&match.seats.indexOf(i)>=0&&(phase==='countdown'||phase==='playing');
+    var inMatch=match&&match.seats.indexOf(i)>=0&&match.cpu!==i&&(phase==='countdown'||phase==='playing');
     if(inMatch){
       if(!conn[i]&&!forfeit[i]){
         (function(seat){
           forfeit[seat]=setTimeout(function(){
             forfeit[seat]=0;
-            if((phase==='countdown'||phase==='playing')&&!conn[seat]&&games[seat]&&!games[seat].over)games[seat].die();
+            if((phase==='countdown'||phase==='playing')&&!conn[seat]&&games[seat]){if(match.solo)games[seat].die();else finish(1-seat);}
           },FORFEIT_MS);
         })(i);
       }else if(conn[i]&&forfeit[i]){clearTimeout(forfeit[i]);forfeit[i]=0;}
@@ -529,11 +659,17 @@ function onSeats(list){
 function onPad(seat,m){
   if(seat!==0&&seat!==1||!m)return;
   if(m.t==='in'){
-    if(phase==='playing'&&games[seat]&&!games[seat].over)games[seat].apply(m.k);
+    if(phase==='playing'&&games[seat]&&!games[seat].over&&!bots[seat])games[seat].apply(m.k);
+  }else if(m.t==='rules'){
+    if(phase!=='lobby'&&phase!=='result')return;
+    rules=m.v?'ko':'classic';
+    try{localStorage.setItem('bd-rules',rules);}catch(e){}
+    renderLobby(); bcState();
   }else if(m.t==='ready'){
     if(phase!=='lobby'&&phase!=='result')return;
     var connected=(conn[0]?1:0)+(conn[1]?1:0);
     if(m.solo&&connected===1&&conn[seat]){startMatch([seat]);return;}
+    if(m.cpu&&CPU[m.cpu]&&conn[seat]&&!conn[1-seat]){startMatch([0,1],{seat:1-seat,level:m.cpu});return;}
     ready[seat]=!!m.v;
     renderLobby(); bcState();
     var want=[]; for(var i=0;i<2;i++)if(conn[i])want.push(i);
@@ -548,58 +684,87 @@ function renderLobby(){
     el.className='seat'+(conn[i]?' conn':'')+(conn[i]&&ready[i]?' ready':'');
     el.querySelector('.st').textContent=!conn[i]?'Waiting for a phone':(ready[i]?'Ready':'Connected');
   }
+  $('#rules').textContent=rules==='ko'?
+    'Rules: KO. Topping out clears your board and gives the other player a KO. First to '+KO_TO_WIN+' KOs wins, or the most KOs after '+(MATCH_MS/60000)+' minutes.':
+    'Rules: Classic. Top out once and you lose.';
 }
+function seatName(i){return match&&match.cpu===i?'Computer · '+CPU_NAME[match.level]:'Player '+(i+1);}
+function seatTag(i){return match&&match.cpu===i?'CPU':'P'+(i+1);}
 function showTally(){
-  $('#tally').innerHTML='<span style="color:'+SEATCOL[0]+'">P1</span> <b>'+wins[0]+'</b> &nbsp;&ndash;&nbsp; <b>'+wins[1]+'</b> <span style="color:'+SEATCOL[1]+'">P2</span>';
+  $('#tally').innerHTML='<span style="color:'+SEATCOL[0]+'">'+seatTag(0)+'</span> <b>'+wins[0]+'</b> &nbsp;&ndash;&nbsp; <b>'+wins[1]+'</b> <span style="color:'+SEATCOL[1]+'">'+seatTag(1)+'</span>';
   $('#tally').hidden=!!(match&&match.solo);
 }
-function startMatch(seatList){
+function startMatch(seatList,cpu){
   var seed=Math.floor(Math.random()*2147483647);
   var solo=seatList.length===1;
-  match={seats:seatList.slice(),solo:solo,t0:performance.now()+COUNTDOWN,winner:null};
-  games=[null,null];
+  match={seats:seatList.slice(),solo:solo,t0:performance.now()+COUNTDOWN,winner:null,cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&rules==='ko',kos:[0,0]};
+  match.tEnd=match.t0+MATCH_MS;
+  var kind=solo?lastKind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between friends and the computer */
+  if(kind!==lastKind){wins=[0,0];lastKind=kind;}
+  games=[null,null]; bots=[null,null];
   var field=$('#field');
   field.innerHTML='';
   panels=[null,null];
   seatList.forEach(function(i){
-    panels[i]=buildPanel(i);
+    panels[i]=buildPanel(i,seatName(i));
     games[i]=new Game(seed);
+    if(match.cpu===i)bots[i]=new Bot(games[i],match.level);
   });
   [0,1].forEach(function(i){if(panels[i])field.appendChild(panels[i].el);});
   seatList.forEach(function(i){
     var g=games[i], other=1-i;
-    g.onSend=function(n){var o=games[other];if(o&&!o.over)o.pending=Math.min(GARBAGE_CAP,o.pending+n);};
+    g.onSend=function(n){var o=games[other];if(o&&!o.over)o.receive(n);};
     g.sfx=function(n,a){SFX.play(n,solo?0:(i===0?-0.6:0.6),a);};
     g.onOver=function(){
       if(phase!=='playing'&&phase!=='countdown')return;
-      if(match.solo)finish(null); else finish(other);
+      if(match.solo){finish(null);return;}
+      if(!match.ko){finish(other);return;}
+      match.kos[other]++;
+      if(match.kos[other]>=KO_TO_WIN){finish(other);return;}
+      g.koUntil=performance.now()+KO_RESPAWN_MS;
+      SFX.play('ko',i===0?-0.6:0.6);
+      bcState();
     };
   });
   for(var i=0;i<2;i++){clearTimeout(forfeit[i]);forfeit[i]=0;}
   ready=[false,false];
   phase='countdown';
   $('#lobby').hidden=true; $('#match').hidden=false; $('#result').hidden=true;
+  $('#clock').hidden=!match.ko; $('#clock').textContent=fmtClock(MATCH_MS); $('#clock').className='clock';
+  panels.forEach(function(p){if(p)p.kn.parentNode.hidden=!match.ko;});
   showTally(); layout();
   bcState();
+}
+function fmtClock(ms){var t=Math.max(0,Math.ceil(ms/1000));return Math.floor(t/60)+':'+('0'+t%60).slice(-2);}
+function timeUp(){
+  var k=match.kos, w=k[0]>k[1]?0:k[1]>k[0]?1:-1;
+  if(w<0){var a=games[0].sent, b=games[1].sent; w=a>b?0:b>a?1:-1;}
+  match.timeUp=true;
+  finish(w);
 }
 function finish(winner){
   if(phase==='result')return;
   phase='result';
   match.winner=winner;
   games.forEach(function(g){if(g)g.over=true;});
-  if(winner!==null)wins[winner]++;
+  if(winner!==null&&winner>=0)wins[winner]++;
   showTally();
   var t=$('#resTitle');
   if(winner===null){
     t.textContent='Game over'; t.style.color='';
     $('#resTally').textContent=games[match.seats[0]].lines+' lines';
     $('#resHint').textContent='Tap Play again on your phone to go again.';
+  }else if(winner<0){
+    t.textContent='Draw'; t.style.color='';
+    $('#resTally').innerHTML=seatTag(0)+' '+wins[0]+' &ndash; '+wins[1]+' '+seatTag(1);
+    $('#resHint').textContent='Time ran out with the same KOs and garbage sent. Tap Rematch to go again.';
   }else{
-    t.textContent='Player '+(winner+1)+' wins'; t.style.color=SEATCOL[winner];
-    $('#resTally').innerHTML='P1 '+wins[0]+' &ndash; '+wins[1]+' P2';
-    $('#resHint').textContent='Tap Rematch on your phones to go again.';
+    t.textContent=match.cpu===winner?'Computer wins':'Player '+(winner+1)+' wins'; t.style.color=SEATCOL[winner];
+    $('#resTally').innerHTML=seatTag(0)+' '+wins[0]+' &ndash; '+wins[1]+' '+seatTag(1);
+    $('#resHint').textContent=match.cpu!=null?'Tap Rematch on your phone to go again.':'Tap Rematch on your phones to go again.';
+    if(match.ko)$('#resHint').textContent=(match.timeUp?'Time ran out. ':'')+'KOs '+match.kos[0]+' to '+match.kos[1]+'. '+$('#resHint').textContent;
   }
-  SFX.play(winner===null?'lose':'win');
+  SFX.play(winner===null||winner<0?'lose':'win');
   $('#count').hidden=true; $('#result').hidden=false;
   ready=[false,false];
   renderLobby(); bcState();
@@ -619,14 +784,20 @@ function frame(ts){
       }
     }
     if(phase==='playing'){
-      for(var i=0;i<2;i++){var g=games[i];if(g&&!g.over)g.tick(ts,match.t0);}
+      for(var i=0;i<2;i++){var g=games[i];if(g&&g.over&&g.koUntil&&ts>=g.koUntil)g.revive();if(g&&!g.over){if(bots[i])bots[i].tick(ts);if(!g.over)g.tick(ts,match.t0);}}
+    }
+    if(phase==='playing'&&match.ko){
+      var rem=match.tEnd-ts, ck=$('#clock'), txt=fmtClock(rem);
+      if(ck.textContent!==txt){ck.textContent=txt;ck.className='clock'+(rem<=30000?' low':'');}
+      if(rem<=0)timeUp();
     }
     for(var j=0;j<2;j++){
       var p=panels[j], gg=games[j];
       if(!p||!gg)continue;
-      drawBoard(p,gg); drawNext(p,gg); drawHold(p,gg);
-      var key=gg.level+'|'+gg.lines+'|'+gg.sent;
-      if(p.shown!==key){p.shown=key;p.lv.textContent=gg.level;p.ln.textContent=gg.lines;p.sn.textContent=gg.sent;}
+      drawBoard(p,gg); if(gg.koUntil&&gg.over)drawKO(p); drawNext(p,gg); drawHold(p,gg);
+      var kos=match.kos[j];
+      var key=gg.level+'|'+gg.lines+'|'+gg.sent+'|'+kos;
+      if(p.shown!==key){p.shown=key;p.lv.textContent=gg.level;p.ln.textContent=gg.lines;p.sn.textContent=gg.sent;p.kn.textContent=kos+' / '+KO_TO_WIN;}
       if(gg.thud&&performance.now()-gg.thud<10){
         p.board.classList.remove('thud'); void p.board.offsetWidth; p.board.classList.add('thud'); gg.thud=0;
       }
