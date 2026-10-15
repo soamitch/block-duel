@@ -7,7 +7,7 @@
 <title>Block Duel Controller</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Hanken+Grotesk:wght@400;600;700&family=Spline+Sans+Mono:wght@500;600&display=swap">
 <style>
-/* Layout: one phone screen. Header with seat chip, a message block or a big swipe surface in the middle, and a row of five buttons at the bottom. Single dark look. */
+/* Layout: one phone screen. Header with seat chip, a message block or a big swipe surface in the middle, and no buttons while playing, the whole area is a swipe surface. Single dark look. */
 :root{
   --bg:#10141a; --panel:#18202a; --line:#2a3544; --fg:#e9edf2; --dim:#8996a8;
   --accent:#f2b134; --accent-ink:#1a1305; --danger:#ea5a5f; --good:#46d695;
@@ -45,11 +45,6 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
 #flash{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 64px var(--font-display); text-transform:uppercase; letter-spacing:.04em; color:var(--c,var(--accent)); opacity:0; pointer-events:none}
 #flash.show{opacity:.9; transition:none}
 #flash.fade{opacity:0; transition:opacity .25s}
-.pad{display:flex; gap:8px; flex:none}
-.key{flex:1; height:64px; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); display:flex; align-items:center; justify-content:center; touch-action:none; padding:0}
-.key svg{width:26px; height:26px; stroke:currentColor; fill:none; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; pointer-events:none}
-.key.down{background:var(--line)}
-.key.drop{background:var(--accent); color:var(--accent-ink); border-color:transparent}
 </style>
 </head>
 <body>
@@ -68,17 +63,10 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
       <button class="btn small" id="soloBtn" hidden>Play on my own</button>
     </div>
     <div id="surface" hidden>
-      <div class="hint" id="surfHint">Drag sideways to move. Tap to rotate. Flick straight down to drop.</div>
+      <div class="hint" id="surfHint">Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.</div>
       <div id="flash"></div>
     </div>
   </main>
-  <div class="pad" id="pad" hidden>
-    <button class="key" id="kL" aria-label="Move left"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-    <button class="key" id="kD" aria-label="Soft drop"><svg viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg></button>
-    <button class="key" id="kR" aria-label="Move right"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-    <button class="key" id="kU" aria-label="Rotate"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button>
-    <button class="key drop" id="kH" aria-label="Hard drop"><svg viewBox="0 0 24 24"><path d="M6 5l6 6 6-6"/><path d="M6 13l6 6 6-6"/></svg></button>
-  </div>
 </div>
 
 <script>
@@ -98,7 +86,9 @@ if(!myId){
 }
 
 function setNet(on){$('#net').className='net'+(on?' on':'');$('#netTxt').textContent=on?'Live':'Offline';}
-function vibe(ms){try{if(navigator.vibrate)navigator.vibrate(ms);}catch(e){}}
+var HAPTICS=true;
+try{if(localStorage.getItem('bd-haptics')==='0')HAPTICS=false;}catch(e){}
+function vibe(ms){if(!HAPTICS)return;try{if(navigator.vibrate)navigator.vibrate(ms);}catch(e){}}
 
 function connect(){
   clearTimeout(retry);
@@ -120,7 +110,8 @@ function connect(){
   ws.onerror=function(){try{ws.close();}catch(x){}};
 }
 function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
-function key(k){sendMsg({t:'in',k:k});}
+var BUZZ={L:8,R:8,D:5,U:12,C:[10,40,10],H:[28,30,16]};
+function key(k){sendMsg({t:'in',k:k});vibe(BUZZ[k]||8);}
 
 /* ---------------------------------------------------------- screens */
 function show(el,on){el.hidden=!on;}
@@ -158,8 +149,7 @@ function render(){
   $('#readyBtn').textContent=btn;
   show($('#soloBtn'),showSolo);
   show($('#surface'),playing);
-  show($('#pad'),playing);
-  $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick straight down to drop.';
+  $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.';
 }
 $('#readyBtn').addEventListener('click',function(){
   var now=!!(S.ready&&S.ready[seat]);
@@ -167,26 +157,6 @@ $('#readyBtn').addEventListener('click',function(){
   sendMsg({t:'ready',v:!now});
 });
 $('#soloBtn').addEventListener('click',function(){sendMsg({t:'ready',v:true,solo:true});});
-
-/* ---------------------------------------------------------- buttons */
-function hold(btn,k,delay,every){
-  var t1=0,t2=0;
-  function stop(){clearTimeout(t1);clearInterval(t2);btn.classList.remove('down');}
-  btn.addEventListener('pointerdown',function(e){
-    e.preventDefault();
-    try{btn.setPointerCapture(e.pointerId);}catch(x){}
-    btn.classList.add('down'); key(k);
-    if(k==='H')vibe(14);
-    if(every){t1=setTimeout(function(){t2=setInterval(function(){key(k);},every);},delay);}
-  });
-  ['pointerup','pointercancel','lostpointercapture'].forEach(function(ev){btn.addEventListener(ev,stop);});
-  btn.addEventListener('contextmenu',function(e){e.preventDefault();});
-}
-hold($('#kL'),'L',150,48);
-hold($('#kR'),'R',150,48);
-hold($('#kD'),'D',0,42);
-hold($('#kU'),'U',0,0);
-hold($('#kH'),'H',0,0);
 
 /* ---------------------------------------------------------- swipe */
 var surf=$('#surface'), flashEl=$('#flash'), sw=null, flashT=0;
@@ -210,8 +180,8 @@ surf.addEventListener('pointermove',function(e){
   if(!sw.mode){
     var tx=e.clientX-sw.x0, ty=e.clientY-sw.y0;
     if(Math.hypot(tx,ty)<14)return;
-    sw.mode=(ty>0&&ty>Math.abs(tx)*1.15)?'v':'h';
-    sw.ax=e.clientX; sw.ay=e.clientY;
+    sw.mode=(Math.abs(ty)>Math.abs(tx)*1.15)?'v':'h';
+    if(sw.mode==='v'){sw.ax=e.clientX; sw.ay=e.clientY;}   /* sideways drags keep counting from the touch-down point, so the first step is not delayed */
   }
   var hs=26, vs=34;
   var dx=e.clientX-sw.ax, dy=e.clientY-sw.ay;
@@ -220,6 +190,7 @@ surf.addEventListener('pointermove',function(e){
     while(dx<=-hs){key('L');sw.ax-=hs;dx+=hs;}
   }
   while(dy>=vs){key('D');sw.ay+=vs;dy-=vs;}
+  if(dy<0)sw.ay=e.clientY;   /* going up re-anchors, so soft drops count from the highest point */
 });
 function swEnd(e){
   surf.classList.remove('touch');
@@ -229,7 +200,8 @@ function swEnd(e){
   var dx=e.clientX-s.x0, dy=e.clientY-s.y0, dt=Math.max(1,performance.now()-s.t0);
   if(Math.hypot(dx,dy)<12&&dt<300){key('U');flash('Turn');return;}
   var h0=s.hist[0], vy=(e.clientY-h0.y)/Math.max(1,performance.now()-h0.t);
-  if(s.mode==='v'&&dy>60&&vy>0.65){key('H');flash('Drop');vibe(14);}
+  if(s.mode==='v'&&dy>60&&vy>0.65){key('H');flash('Drop');}
+  else if(s.mode==='v'&&dy<-60&&vy<-0.55){key('C');flash('Hold');}
 }
 surf.addEventListener('pointerup',swEnd);
 surf.addEventListener('pointercancel',swEnd);

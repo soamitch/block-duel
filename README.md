@@ -1,7 +1,7 @@
 # Block Duel, TV edition
 
 Two players, one TV, two phones. The TV shows both boards. Each phone is a
-controller with swipe gestures and buttons. Everything stays on your home network.
+controller driven by swipe gestures. Everything stays on your home network.
 
 ## Run it
 
@@ -44,7 +44,11 @@ One phone alone can tap "Play on my own" for a practice run.
 - Tap to rotate.
 - Drag down slowly to soft drop.
 - Flick straight down to hard drop.
-- The buttons along the bottom do the same: left, soft drop, right, rotate, hard drop.
+- Flick up to hold the current piece (once per piece).
+- The phone buzzes on each move (Android only: iPhone Safari does not allow web pages to vibrate).
+
+## Sound
+The TV page plays the sound effects. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
 
 Clearing 2, 3 or 4 lines at once sends 1, 2 or 4 garbage rows to the other board.
 Both players get the same pieces in the same order.
