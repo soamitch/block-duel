@@ -88,7 +88,23 @@ if(!myId){
 function setNet(on){$('#net').className='net'+(on?' on':'');$('#netTxt').textContent=on?'Live':'Offline';}
 var HAPTICS=true;
 try{if(localStorage.getItem('bd-haptics')==='0')HAPTICS=false;}catch(e){}
-function vibe(ms){if(!HAPTICS)return;try{if(navigator.vibrate)navigator.vibrate(ms);}catch(e){}}
+/* Android has navigator.vibrate. iPhones do not, but recent iOS Safari ticks the haptic engine when a native switch control is toggled by a touch, so on those we click a hidden switch instead. It gives one light tick per call whatever the pattern. */
+var TICK=null;
+function makeTick(){
+  var l=document.createElement('label');
+  l.setAttribute('aria-hidden','true');
+  l.style.cssText='position:fixed;left:-40px;top:-40px;width:20px;height:20px;opacity:.01;pointer-events:none;overflow:hidden';
+  var i=document.createElement('input'); i.type='checkbox'; i.setAttribute('switch',''); i.tabIndex=-1;
+  l.appendChild(i); document.body.appendChild(l); return l;
+}
+function vibe(ms){
+  if(!HAPTICS)return;
+  try{
+    if(navigator.vibrate){navigator.vibrate(ms);return;}
+    if(!TICK)TICK=makeTick();
+    TICK.click();
+  }catch(e){}
+}
 
 function connect(){
   clearTimeout(retry);
