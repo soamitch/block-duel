@@ -94,6 +94,11 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
         <button class="btn small" data-min="2">2 min</button><button class="btn small" data-min="3">3 min</button><button class="btn small" data-min="5">5 min</button><button class="btn small" data-min="0">None</button>
       </div>
       <p class="rules-note" id="rulesNote"></p>
+      <div class="opt" id="soundRow">
+        <span class="lbl">Sound</span>
+        <button class="btn small" data-sound="1" aria-pressed="false">On</button><button class="btn small" data-sound="0" aria-pressed="false">Off</button>
+      </div>
+      <p class="rules-note" id="soundNote" hidden></p>
       <div class="opt" id="swipeRow" style="grid-template-columns:64px 1fr auto">
         <label class="lbl" for="sens">Swipe</label>
         <input type="range" id="sens" min="1" max="5" step="1" value="3" aria-describedby="sensTxt">
@@ -191,9 +196,11 @@ function connect(){
 }
 function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
 var BUZZ={L:8,R:8,D:5,U:12,C:[10,40,10],H:[28,30,16]};
+/* in TV mode the phone plays the sound of each input itself; in phone mode the board on this phone makes all the sounds */
+var KEY_SFX={L:'move',R:'move',U:'rotate',Z:'rotate',H:'hard',C:'hold'};
 function key(k){
   vibe(BUZZ[k]||8);
-  if(!phoneMode()){sendMsg({t:'in',k:k});return;}
+  if(!phoneMode()){sendMsg({t:'in',k:k});if(KEY_SFX[k]&&S.phase==='playing')SFX.play(KEY_SFX[k],0);return;}
   var g=myGame(); if(g&&!g.over)g.apply(k);
 }
 function hint(txt){if(!phoneMode())flash(txt);}   /* the move names only show on the plain swipe pad, not over a board */
@@ -261,7 +268,8 @@ function render(){
   show($('#timeRow'),showRules&&ko);
   Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
   $('#rulesNote').textContent=!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
-  show($('#swipeRow'),showReady);
+  show($('#swipeRow'),showReady); show($('#soundRow'),showReady); soundNote(showReady);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-sound')==='1')===SFX.isOn()));});
   show($('#screenRow'),showReady&&room.tv);
   Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-screen')===room.screen));});
   var wasHidden=$('#local').hidden, local=playing&&phoneMode();
@@ -287,6 +295,21 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(
 Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){
   b.addEventListener('click',function(){act({t:'kotime',min:+b.getAttribute('data-min')});});
 });
+Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){
+  b.addEventListener('click',function(){
+    if((b.getAttribute('data-sound')==='1')!==SFX.isOn())SFX.toggle();
+    SFX.init(); if(SFX.isOn())SFX.play('rotate',0); render();
+  });
+});
+/* says when sound is not running yet, which is the usual reason a phone stays quiet */
+function soundNote(visible){
+  var st=SFX.state(), el=$('#soundNote'), txt='';
+  if(SFX.isOn()&&st!=='running')txt=st==='none'?'Tap the screen once to start sound.':'Sound is paused ('+st+'). Tap the screen to start it.';
+  else if(SFX.isOn())txt='Sound is on. Hear nothing? Turn the volume up, and on an iPhone check the silent switch.';
+  el.textContent=txt; show(el,visible&&!!txt);
+}
+SFX.phone();
+SFX.onchange=function(){soundNote(!$('#soundRow').hidden);};
 function showSens(){$('#sens').value=sens;$('#sensTxt').textContent=SENS_NAMES[sens-1];}
 $('#sens').addEventListener('input',function(){
   sens=+this.value; showSens(); vibe(8);

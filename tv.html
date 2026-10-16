@@ -137,6 +137,9 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 'use strict';
 function $(s){return document.querySelector(s);}
 var SEATCOL=[tok('--p1'),tok('--p2')];
+/* The TV only plays the big moments: line clears and garbage landing here, plus KOs, the countdown and the result elsewhere.
+   Move, rotate, drop and hold sounds come from each player's phone. */
+var TV_SFX={clear:1,garbage:1};
 
 /* ------------------------------------------------------------- panels */
 var panels=[null,null], cs=24;
@@ -295,7 +298,7 @@ function startMatch(seatList,cpu){
   seatList.forEach(function(i){
     var g=games[i], other=1-i;
     g.onSend=function(n){var o=games[other];if(o&&!o.over)o.receive(n);};
-    g.sfx=function(n,a){SFX.play(n,solo?0:(i===0?-0.6:0.6),a);};
+    g.sfx=function(n,a){if(TV_SFX[n])SFX.play(n,solo?0:(i===0?-0.6:0.6),a);};
     g.onOver=function(){
       if(phase!=='playing'&&phase!=='countdown')return;
       if(match.solo){finish(null);return;}

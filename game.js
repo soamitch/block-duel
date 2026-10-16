@@ -277,29 +277,38 @@ Bot.prototype.tick=function(ts){
 /* ------------------------------------------------------------- sound */
 /* Everything is synthesised with Web Audio, so there are no audio files. Browsers keep audio locked until the page has been clicked or a key pressed once, so the TV page asks for that. Press M to mute. */
 var SFX=(function(){
-  var ctx=null, master=null, on=true;
+  var ctx=null, master=null, on=true, small=false, unlocked=false, api;
   try{on=localStorage.getItem('bd-sound')!=='0';}catch(e){}
   function badge(){
+    if(api&&api.onchange)api.onchange();
     var el=document.getElementById('snd'); if(!el)return;
     var running=!!ctx&&ctx.state==='running';
     el.textContent=!on?'Sound off · press M':(running?'Sound on · press M to mute':'Click this screen once to turn on sound');
     el.className=running&&on?'ok':'';
   }
   function init(){
+    /* iPhone: Web Audio is muted by the silent switch unless the page asks for media playback (Safari 16.4 and later) */
+    try{if(navigator.audioSession&&navigator.audioSession.type!=='playback')navigator.audioSession.type='playback';}catch(e){}
     if(!ctx){
       var AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
-      ctx=new AC(); master=ctx.createGain(); master.gain.value=0.55; master.connect(ctx.destination);
+      ctx=new AC(); master=ctx.createGain(); master.gain.value=small?0.9:0.55; master.connect(ctx.destination);
       ctx.onstatechange=badge;
     }
-    if(ctx.state==='suspended')ctx.resume().then(badge,function(){});
+    if(ctx.state!=='running'&&ctx.state!=='closed'){var r=ctx.resume(); if(r&&r.then)r.then(badge,function(){});}   /* 'suspended', or 'interrupted' after a call or another app */
+    if(!unlocked){                         /* older iOS only unlocks once a sound has been started inside a tap */
+      try{var b=ctx.createBuffer(1,1,22050), src=ctx.createBufferSource(); src.buffer=b; src.connect(ctx.destination); src.start(0); unlocked=true;}catch(e){}
+    }
     badge();
   }
+  /* Phone speakers cannot play much below 300 Hz, so on a phone the low thuds are moved up and everything is louder. */
+  function phone(){small=true; if(master)master.gain.value=0.9;}
   function out(pan){
     if(ctx.createStereoPanner&&pan){var p=ctx.createStereoPanner();p.pan.value=pan;p.connect(master);return p;}
     return master;
   }
   function tone(f0,f1,dur,type,vol,pan,delay){
     var t=ctx.currentTime+(delay||0), o=ctx.createOscillator(), g=ctx.createGain();
+    if(small){if(f0<300)f0*=2.5; if(f1<300)f1*=2.5; vol=Math.min(0.5,vol*1.6);}
     o.type=type; o.frequency.setValueAtTime(f0,t);
     if(f1!==f0)o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);
     g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.008); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
@@ -309,7 +318,7 @@ var SFX=(function(){
     var t=ctx.currentTime+(delay||0), n=Math.floor(ctx.sampleRate*dur), b=ctx.createBuffer(1,n,ctx.sampleRate), d=b.getChannelData(0);
     for(var i=0;i<n;i++)d[i]=(Math.random()*2-1)*(1-i/n);
     var s=ctx.createBufferSource(); s.buffer=b;
-    var f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=fc;
+    var f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=small?Math.max(fc,2500):fc;
     var g=ctx.createGain(); g.gain.value=vol;
     s.connect(f); f.connect(g); g.connect(out(pan)); s.start(t);
   }
@@ -337,10 +346,12 @@ var SFX=(function(){
     }
   }
   function toggle(){on=!on;try{localStorage.setItem('bd-sound',on?'1':'0');}catch(e){} badge();}
-  ['pointerdown','keydown','touchstart'].forEach(function(ev){document.addEventListener(ev,function(e){if(ev==='keydown'&&(e.key==='m'||e.key==='M'))return;init();},{passive:true});});
+  /* phones only unlock audio on the end of a touch (touchend, pointerup, click), not on touchstart */
+  ['pointerdown','pointerup','touchstart','touchend','click','keydown'].forEach(function(ev){document.addEventListener(ev,function(e){if(ev==='keydown'&&(e.key==='m'||e.key==='M'))return;init();},{passive:true});});
   document.addEventListener('keydown',function(e){if(e.key==='m'||e.key==='M'){init();toggle();}});
   badge();
-  return {init:init,play:play,toggle:toggle};
+  api={init:init,play:play,toggle:toggle,phone:phone,onchange:null,isOn:function(){return on;},state:function(){return ctx?ctx.state:'none';}};
+  return api;
 })();
 
 

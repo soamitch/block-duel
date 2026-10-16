@@ -67,8 +67,8 @@ because it hands out the page and passes messages between the phones.
 The swipe sensitivity slider in the phone lobby sets how far a drag moves the piece. It is saved on each phone.
 
 ## Sound
-The TV page plays the sound effects. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
-When playing on phones only, each phone plays its own sounds.
+The TV plays the big moments: line clears, garbage landing, KOs, the countdown and the result. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
+Each phone plays the sounds of its own moves, rotations, drops and holds. When playing on phones only, each phone plays all the sounds for its own board. Turn phone sound on or off in the phone lobby.
 
 Clearing 2, 3 or 4 lines at once sends 1, 1 or 3 garbage rows to the other board.
 Incoming garbage waits 1.5 seconds before it lands, so you can clear lines to cancel it.
