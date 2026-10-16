@@ -366,8 +366,8 @@ function handle(conn) {
         return;
       }
       if (screen() !== 'tv') return;
-      if ((m.t === 'in' && typeof m.k === 'string' && m.k.length <= 8) || m.t === 'ready' || m.t === 'rules' || m.t === 'kotime' || m.t === 'mode') {
-        send(tv, { t: 'pad', seat, m: { t: m.t, k: m.k, v: !!m.v, solo: !!m.solo, cpu: ['easy', 'normal', 'hard'].includes(m.cpu) ? m.cpu : undefined, min: Number.isInteger(m.min) ? m.min : undefined } });
+      if ((m.t === 'in' && typeof m.k === 'string' && m.k.length <= 8) || m.t === 'ready' || m.t === 'rules' || m.t === 'kotime' || m.t === 'mode' || m.t === 'powers' || m.t === 'pack') {
+        send(tv, { t: 'pad', seat, m: { t: m.t, k: m.k, v: !!m.v, solo: !!m.solo, cpu: ['easy', 'normal', 'hard'].includes(m.cpu) ? m.cpu : undefined, min: Number.isInteger(m.min) ? m.min : undefined, p: typeof m.p === 'string' && m.p.length <= 16 ? m.p : undefined } });
       }
     }
   };

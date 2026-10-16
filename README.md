@@ -47,6 +47,22 @@ One phone alone can tap "Play on my own" for a practice run, or play the compute
   runs out the most KOs wins, then the most garbage sent.
 - **Classic**: top out once and you lose.
 
+**Power-ups** (versus, on by default, Powers: On / Off in the lobby): now and then a piece
+shimmers through the power colours as it falls. When you place it, it settles on one power
+and its blocks keep that colour. The power goes off when you clear a line holding one of
+those blocks, so you choose when to send it; the piece's other blocks then turn grey. Both
+players get them on the same pieces.
+- **Fill** (gold): lines up the gaps in your stack (up to 8 rows) into one open column, ready for a long piece.
+- **Flip** (red): turns the other board upside down for 8 seconds.
+- **Swap** (purple): swaps the other player's left and right for 8 seconds.
+- **Rush** (orange): makes the other player's pieces fall fast for 6 seconds.
+- **Shield** (green): wipes your incoming garbage and blocks attacks for 10 seconds.
+- **Blast** (blue): clears your bottom two rows.
+
+**Colour packs**: open "Your colours, swipe and sound" in the phone lobby to pick Classic,
+Neon, Pastel, Sunset, Retro or Clear (colour-blind friendly). Your board uses your pack on
+the TV and on your phone.
+
 **Co-op**: pick Mode: Co-op in the phone lobby and both tap Ready. You share one wide
 board (16 columns), each dropping your own pieces (outlined in your colour) with your own
 hold and next. Falling pieces pass through each other; they only meet once placed. Clear lines together; speed rises over time, and the run ends when the

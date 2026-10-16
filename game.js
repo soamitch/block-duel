@@ -15,6 +15,34 @@ function tok(n,fallback){return css.getPropertyValue(n).trim()||fallback||'';}
 var PAL=[null,tok('--p1','#4cc9f0'),tok('--p2','#f2b134'),tok('--p3','#b08af0'),tok('--p4','#46d695'),tok('--p5','#ea5a5f'),tok('--p6','#5f8cf0'),tok('--p7','#ff8f4a'),tok('--p8','#566170')];
 var C_BOARD=tok('--board','#0b0f14'), C_GRID=tok('--gridline','#18202a'), C_DANGER=tok('--danger','#ea5a5f'), C_SHINE=tok('--shine','rgba(255,255,255,.22)'), C_SHADE=tok('--shade','rgba(0,0,0,.24)'), C_FG=tok('--fg','#e9edf2'), C_SCRIM=tok('--scrim','rgba(10,13,18,.86)');
 
+/* Power pieces (versus, when Power-ups is on). Now and then a piece shimmers through the power colours while it falls; when it is
+   placed it settles on one power and its blocks keep that colour. The power goes off when a line holding one of those blocks is
+   cleared, so the player picks the moment; the piece's other blocks then go grey. Both players get them on the same pieces of their
+   (identical) sequence, at least POWER_GAP pieces apart. Self powers help you; the others hit the opponent for dur ms unless their
+   Shield is up. Fill lines the gaps of up to FILL_ROWS rows of your stack up into one open column; its new blocks are CELL_FILLED. */
+var POWER_GAP=5, POWER_CHANCE=0.16, FILL_ROWS=8, CELL_FILLED=15, CELL_SPENT=8;
+var POWERS={
+  fill:  {id:9,  name:'Fill',   icon:'\u2726', col:'#ffd34d', deep:'#a8740a', self:true,  note:'lines the gaps in your stack up into one column'},
+  flip:  {id:10, name:'Flip',   icon:'\u21c5', col:'#ff4f6a', deep:'#9c1030', dur:8000,  hit:'Flipped', note:'turns the other board upside down'},
+  swap:  {id:11, name:'Swap',   icon:'\u21c4', col:'#b76cff', deep:'#5a22a6', dur:8000,  hit:'Swapped', note:'swaps the other player\'s left and right'},
+  rush:  {id:12, name:'Rush',   icon:'\u00bb', col:'#ff8f2e', deep:'#a84800', dur:6000,  hit:'Rushed',  note:'makes the other pieces fall fast'},
+  shield:{id:13, name:'Shield', icon:'\u25c8', col:'#3fe28d', deep:'#0e7a45', self:true, dur:10000, note:'wipes your incoming garbage and blocks attacks'},
+  blast: {id:14, name:'Blast',  icon:'\u2738', col:'#4cc8ff', deep:'#0a6aa3', self:true,  note:'clears your bottom two rows'}
+};
+var POWER_KEYS=['fill','flip','swap','rush','shield','blast'], POWER_BY_ID={};
+POWER_KEYS.forEach(function(k){POWER_BY_ID[POWERS[k].id]=k;});
+/* Colour packs: each player picks one on their phone. Order: I, O, T, S, Z, J, L, garbage. Power colours stay the same in every pack. */
+var PACKS={
+  classic:{name:'Classic', c:[PAL[1],PAL[2],PAL[3],PAL[4],PAL[5],PAL[6],PAL[7],PAL[8]]},
+  neon:   {name:'Neon',    c:['#00f0ff','#fff200','#d000ff','#39ff14','#ff1f4b','#3d6bff','#ff9100','#3a404d']},
+  pastel: {name:'Pastel',  c:['#a5dcf7','#ffe8a3','#d9c2ff','#b2ebc1','#ffb3ae','#b3c8ff','#ffd0a6','#6d7684']},
+  sunset: {name:'Sunset',  c:['#ffcf5c','#ffa62b','#ff5e7e','#ff8a65','#c77dff','#ff7aa8','#ffc4a3','#4d3d52']},
+  retro:  {name:'Retro',   c:['#c7f0a5','#9bbc0f','#7da35c','#5e8f3c','#3f7a3a','#2f6a4f','#a3c46b','#2a3d2a']},
+  clear:  {name:'Clear',   c:['#56b4e9','#f0e442','#cc79a7','#009e73','#d55e00','#0072b2','#e69f00','#5f6670']}
+};
+var PACK_KEYS=['classic','neon','pastel','sunset','retro','clear'];
+function packPal(k){var pk=PACKS[k]||PACKS.classic; return [null].concat(pk.c);}
+
 /* ------------------------------------------------------------- engine */
 var SHAPES={
   I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
@@ -43,6 +71,9 @@ function Game(seed,o){
   this.lastFall=0; this.groundAt=null; this.resets=0; this.fx=null; this.started=false;
   this.held=null; this.canHold=true; this.sfx=function(){};
   this.onSend=function(){}; this.onOver=function(){}; this.onLock=function(){};
+  this.powers=!!o.powers; this.prng=mulberry32((seed^0x5bd1e995)>>>0); this.qsp=[]; this.sinceSp=0; this.heldSp=false;
+  this.effects={}; this.banner=null; this.burst=null; this.filled=null; this.blasted=0; this.hits=0; this.lastHit=null;
+  this.onPower=function(){}; this.pal=null;
   if(!o.noSpawn)this.spawn();
 }
 Game.prototype.refill=function(){
@@ -52,7 +83,9 @@ Game.prototype.refill=function(){
       for(var i=b.length-1;i>0;i--){var j=Math.floor(this.rng()*(i+1));var t=b[i];b[i]=b[j];b[j]=t;}
       this.bag=b;
     }
-    this.queue.push(this.bag.pop());
+    var sp=false;
+    if(this.powers){this.sinceSp++; if(this.sinceSp>=POWER_GAP&&this.prng()<POWER_CHANCE){sp=true;this.sinceSp=0;}}
+    this.queue.push(this.bag.pop()); this.qsp.push(sp);
   }
 };
 function collideOn(board,m,x,y){
@@ -65,11 +98,11 @@ function collideOn(board,m,x,y){
   return false;
 }
 Game.prototype.collide=function(m,x,y){return collideOn(this.board,m,x,y);};
-Game.prototype.spawn=function(forced){
-  var t=forced;
-  if(!t){this.refill(); t=this.queue.shift(); this.refill();}
+Game.prototype.spawn=function(forced,forcedSp){
+  var t=forced, sp=!!forcedSp;
+  if(!t){this.refill(); t=this.queue.shift(); sp=!!this.qsp.shift(); this.refill();}
   var m=SHAPES[t].map(function(r){return r.slice();});
-  this.cur={t:t,m:m,x:this.spawnAt+Math.floor((this.spawnW-m.length)/2),y:t==='I'?-1:0};
+  this.cur={t:t,m:m,x:this.spawnAt+Math.floor((this.spawnW-m.length)/2),y:t==='I'?-1:0,sp:sp};
   this.groundAt=null; this.resets=0; this.lastFall=performance.now();
   return !this.collide(this.cur.m,this.cur.x,this.cur.y);
 };
@@ -77,9 +110,9 @@ Game.prototype.touchReset=function(){if(this.groundAt!=null&&this.resets<12){thi
 Game.prototype.move=function(dx){if(this.over)return;var c=this.cur;if(!this.collide(c.m,c.x+dx,c.y)){c.x+=dx;this.touchReset();this.sfx('move');}};
 Game.prototype.hold=function(){
   if(this.over||!this.canHold)return;
-  var t=this.cur.t, ok;
-  if(this.held){var h=this.held; this.held=t; ok=this.spawn(h);}
-  else{this.held=t; ok=this.spawn();}
+  var t=this.cur.t, sp=!!this.cur.sp, ok;
+  if(this.held){var h=this.held, hs=this.heldSp; this.held=t; this.heldSp=sp; ok=this.spawn(h,hs);}
+  else{this.held=t; this.heldSp=sp; ok=this.spawn();}
   this.canHold=false; this.sfx('hold');
   if(!ok)this.die();
 };
@@ -103,6 +136,7 @@ Game.prototype.hard=function(){
   this.lock();
 };
 Game.prototype.receive=function(n){
+  if(this.fxOn('shield'))return;                 /* the shield swallows garbage */
   n=Math.min(n,GARBAGE_CAP-this.pending); if(n<=0)return;
   this.incoming.push({n:n,t:performance.now()}); this.pending+=n;
 };
@@ -125,21 +159,36 @@ Game.prototype.addGarbage=function(k){
   }
   return topOut;
 };
+/* clears full rows; powers whose blocks were in them are queued in this.fired, and the rest of those blocks go grey */
+Game.prototype.clearFull=function(){
+  var fired=this.fired||(this.fired=[]);
+  var kept=this.board.filter(function(row){
+    if(!row.every(function(v){return v;}))return true;
+    row.forEach(function(v){var k=POWER_BY_ID[v]; if(k&&fired.indexOf(k)<0)fired.push(k);});
+    return false;
+  }), n=ROWS-kept.length;
+  while(kept.length<ROWS)kept.unshift(new Array(this.cols).fill(0));
+  this.board=kept;
+  if(fired.length)this.board.forEach(function(row){for(var c=0;c<row.length;c++){var k=POWER_BY_ID[row[c]]; if(k&&fired.indexOf(k)>=0)row[c]=CELL_SPENT;}});
+  return n;
+};
 Game.prototype.lock=function(){
   var c=this.cur, topOut=false, r, cc;
+  var pw=c.sp?POWER_KEYS[Math.floor(this.prng()*POWER_KEYS.length)]:null, val=pw?POWERS[pw].id:IDS[c.t];
   for(r=0;r<c.m.length;r++)for(cc=0;cc<c.m[r].length;cc++){
     if(!c.m[r][cc])continue;
     var y=c.y+r;
     if(y<0){topOut=true;continue;}
-    this.board[y][c.x+cc]=IDS[c.t];
+    this.board[y][c.x+cc]=val;
   }
   if(topOut){this.die();return;}
-  var kept=this.board.filter(function(row){return !row.every(function(v){return v;});});
-  var n=ROWS-kept.length;
-  while(kept.length<ROWS)kept.unshift(new Array(this.cols).fill(0));
-  this.board=kept;
+  if(pw){this.burst={t:performance.now(),p:pw,x:c.x+c.m.length/2,y:c.y+c.m.length/2}; this.banner={p:pw,t:performance.now(),mode:'armed'}; this.sfx('arm',pw);}
+  this.fired=[];
+  var n=this.clearFull();
   if(n)this.lines+=n;
   this.onLock(n);
+  var fired=this.fired; this.fired=[];
+  for(var f=0;f<fired.length;f++)n+=this.usePower(fired[f]);
   if(n){
     var s=this.cancel(GARBAGE_TABLE[Math.min(n,GARBAGE_TABLE.length-1)]);
     if(s>0){this.sent+=s; this.onSend(s);}
@@ -156,8 +205,48 @@ Game.prototype.lock=function(){
   this.canHold=true;
   if(!this.spawn())this.die();
 };
+/* a power goes off (its line was cleared): self powers act here, the rest go to the opponent through onPower. Returns extra lines cleared. */
+Game.prototype.usePower=function(pw){
+  var P=POWERS[pw], now=performance.now(), extra=0, r, c;
+  this.banner={p:pw,t:now,mode:P.self?'self':'send'};
+  this.sfx('power',pw);
+  if(pw==='fill'){
+    var top=ROWS; for(r=0;r<ROWS;r++)if(this.board[r].some(function(v){return v;})){top=r;break;}
+    var low=ROWS, changed=[], best=-1, well=this.cols-1, self=this;
+    function count(row){return self.board[row].filter(function(v){return v;}).length;}
+    while(low-1>=top&&ROWS-(low-1)<=FILL_ROWS&&count(low-1)*2>=self.cols)low--;   /* the solid part of the stack, at most FILL_ROWS rows */
+    for(c=0;c<this.cols;c++){                      /* the well goes where most gaps already are (rightmost on a tie) */
+      var empty=0; for(r=low;r<ROWS;r++)if(!this.board[r][c])empty++;
+      if(empty>=best){best=empty;well=c;}
+    }
+    for(r=low;r<ROWS&&top<ROWS;r++)for(c=0;c<this.cols;c++){
+      if(c===well){if(this.board[r][c]){this.board[r][c]=0;changed.push([r,c]);}}
+      else if(!this.board[r][c]){this.board[r][c]=CELL_FILLED;changed.push([r,c]);}
+    }
+    for(r=top;r<low;r++)if(this.board[r][well]){this.board[r][well]=0;changed.push([r,well]);}   /* keep the well open to the top */
+    this.filled={t:now,cells:changed};
+  }else if(pw==='blast'){
+    this.board.splice(ROWS-2,2);
+    this.board.unshift(new Array(this.cols).fill(0),new Array(this.cols).fill(0));
+    this.blasted=now;
+  }else if(pw==='shield'){
+    this.incoming=[]; this.pending=0; this.effects.shield=now+P.dur;
+  }else this.onPower(pw);
+  return extra;
+};
+/* an attack from the other player; returns false when the shield blocked it */
+Game.prototype.hit=function(pw){
+  var P=POWERS[pw]; if(!P||P.self||this.over)return false;
+  var now=performance.now();
+  if(this.fxOn('shield')){this.banner={p:'shield',t:now,mode:'block'};this.sfx('block');return false;}
+  this.effects[pw]=now+P.dur; this.banner={p:pw,t:now,mode:'hit'}; this.hits++; this.lastHit=pw;
+  this.sfx('zap',pw);
+  return true;
+};
+Game.prototype.fxOn=function(k){return (this.effects[k]||0)>performance.now();};
 Game.prototype.revive=function(){
   for(var r=0;r<ROWS;r++)this.board[r].fill(0);
+  this.effects={};
   this.incoming=[]; this.pending=0; this.held=null; this.canHold=true; this.fx=null;
   this.over=false; this.koUntil=0; this.spawn();
 };
@@ -168,6 +257,7 @@ Game.prototype.die=function(){
 };
 Game.prototype.apply=function(k){
   if(this.over)return;
+  if(this.fxOn('swap')){if(k==='L')k='R';else if(k==='R')k='L';}
   if(k==='L')this.move(-1);
   else if(k==='R')this.move(1);
   else if(k==='D')this.soft();
@@ -181,6 +271,7 @@ Game.prototype.tick=function(ts,t0){
   if(!this.started){this.started=true;this.lastFall=ts;}
   this.level=this.levelOverride||(1+Math.floor(this.lines/LEVEL_EVERY_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS));
   var iv=Math.max(GRAVITY_MIN,GRAVITY_START-(this.level-1)*GRAVITY_STEP), c=this.cur;
+  if(this.fxOn('rush'))iv=Math.max(45,iv/4);
   if(ts-this.lastFall>=iv){this.lastFall=ts;if(!this.collide(c.m,c.x,c.y+1))c.y++;}
   if(this.collide(c.m,c.x,c.y+1)){
     if(this.groundAt==null)this.groundAt=ts;
@@ -243,8 +334,8 @@ CoopGame.prototype.tick=function(ts,t0){
    moves, and how often it settles for a worse spot. */
 var CPU={
   easy:  {think:700,step:190,slip:0.35,hold:false,greed:0},
-  normal:{think:380,step:110,slip:0.12,hold:true, greed:0.6},
-  hard:  {think:170,step:55, slip:0,   hold:true, greed:1}
+  normal:{think:380,step:110,slip:0.12,hold:true, greed:0.6, adapt:true},
+  hard:  {think:170,step:55, slip:0,   hold:true, greed:1,   adapt:true}
 };
 var CPU_NAME={easy:'Easy',normal:'Normal',hard:'Hard'};
 /* Board score: El-Tetris weights (landing height, rows cleared, row and column transitions, holes, wells). */
@@ -324,7 +415,11 @@ Bot.prototype.tick=function(ts){
   var p=this.plan, c=g.cur;
   if(p.hold){p.hold=false;g.apply('C');return;}
   if(!sameMat(c.m,p.m)&&p.spins<4){p.spins++;g.apply('U');return;}
-  if(c.x!==p.x){var x0=c.x;g.apply(c.x<p.x?'R':'L');if(c.x!==x0)return;}
+  if(c.x!==p.x){
+    var x0=c.x, dir=c.x<p.x?'R':'L';
+    if(this.cfg.adapt&&g.fxOn('swap'))dir=dir==='R'?'L':'R';   /* Normal and Hard notice their controls are swapped */
+    g.apply(dir); if(c.x!==x0)return;
+  }
   g.apply('H');
 };
 
@@ -407,6 +502,10 @@ var SFX=(function(){
       case 'go': tone(NOTE.a4*2,NOTE.a4*2,0.35,'square',0.1,0); break;
       case 'win': [NOTE.c5,NOTE.e5,NOTE.g5,NOTE.c6].forEach(function(f,i){tone(f,f,0.22,'triangle',0.2,0,i*0.11);}); tone(NOTE.c6,NOTE.c6,0.5,'triangle',0.2,0,0.5); break;
       case 'ko': tone(420,70,0.5,'sawtooth',0.18,pan); noise(0.35,0.22,pan,1200); break;
+      case 'power': [784,988,1175,1568].forEach(function(f,i){tone(f,f*1.01,0.12,'triangle',0.13,pan,i*0.045);}); noise(0.2,0.06,pan,9000,0.12); break;
+      case 'arm': [988,1319].forEach(function(f,i){tone(f,f,0.09,'triangle',0.08,pan,i*0.05);}); break;
+      case 'zap': tone(1400,180,0.35,'sawtooth',0.12,pan); tone(700,90,0.35,'square',0.06,pan,0.03); noise(0.15,0.12,pan,4000); break;
+      case 'block': tone(1320,1320,0.25,'sine',0.16,pan); tone(1980,1980,0.2,'sine',0.08,pan,0.03); break;
       case 'lose': [NOTE.e4,NOTE.c4].forEach(function(f,i){tone(f*1.2,f*0.9,0.3,'sawtooth',0.12,0,i*0.22);}); break;
     }
   }
@@ -436,6 +535,38 @@ function cell(ctx,x,y,s,col){
   ctx.fillStyle=C_SHINE; ctx.fillRect(x+0.5,y+0.5,s-1,hl);
   ctx.fillStyle=C_SHADE; ctx.fillRect(x+0.5,y+s-0.5-sh,s-1,sh);
 }
+function rgbOf(hex){var n=parseInt(hex.slice(1),16);return [n>>16&255,n>>8&255,n&255];}
+function mixCol(a,b,k){var x=rgbOf(a),y=rgbOf(b);return 'rgb('+Math.round(x[0]+(y[0]-x[0])*k)+','+Math.round(x[1]+(y[1]-x[1])*k)+','+Math.round(x[2]+(y[2]-x[2])*k)+')';}
+/* the colour a power piece shows while it falls: it glides through every power colour */
+function shimmerCol(t,off){
+  var f=((t/170+(off||0))%POWER_KEYS.length+POWER_KEYS.length)%POWER_KEYS.length, i=Math.floor(f), k=f-i;
+  k=k*k*(3-2*k);
+  return mixCol(POWERS[POWER_KEYS[i]].col,POWERS[POWER_KEYS[(i+1)%POWER_KEYS.length]].col,k);
+}
+/* a block left by a power piece: metallic, with a slow light sweep */
+function powerCell(ctx,x,y,s,P,t){
+  var g=ctx.createLinearGradient(x,y,x+s,y+s);
+  g.addColorStop(0,P.col); g.addColorStop(0.55,P.col); g.addColorStop(1,P.deep);
+  ctx.fillStyle=g; ctx.fillRect(x+0.5,y+0.5,s-1,s-1);
+  ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=1; ctx.strokeRect(x+2,y+2,s-4,s-4);
+  var band=((t/1600+(x+y)/(s*40))%1)*s*3-s;
+  ctx.save(); ctx.beginPath(); ctx.rect(x+0.5,y+0.5,s-1,s-1); ctx.clip();
+  ctx.fillStyle='rgba(255,255,255,.28)';
+  ctx.beginPath(); ctx.moveTo(x+band,y); ctx.lineTo(x+band+s*0.35,y); ctx.lineTo(x+band+s*0.35-s,y+s); ctx.lineTo(x+band-s,y+s); ctx.fill();
+  ctx.restore();
+}
+/* a cell of a falling power piece: shifting colour, glow and a glint */
+function shimmerCell(ctx,x,y,s,t,k){
+  var col=shimmerCol(t,k*0.35);
+  ctx.save(); ctx.shadowColor=col; ctx.shadowBlur=s*0.7;
+  cell(ctx,x,y,s,col);
+  ctx.restore();
+  var tw=(Math.sin(t/140+k*1.7)+1)/2;
+  ctx.fillStyle='rgba(255,255,255,'+(0.35+0.6*tw).toFixed(2)+')';
+  var cx=x+s*0.3, cy=y+s*0.3, r=s*(0.12+0.1*tw);
+  ctx.beginPath(); ctx.moveTo(cx,cy-r*2); ctx.lineTo(cx+r*0.5,cy); ctx.lineTo(cx,cy+r*2); ctx.lineTo(cx-r*0.5,cy); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx-r*2,cy); ctx.lineTo(cx,cy+r*0.5); ctx.lineTo(cx+r*2,cy); ctx.lineTo(cx,cy-r*0.5); ctx.fill();
+}
 function drawGrid(cv,cols,cs){
   var ctx=cv.getContext('2d'), r, c;
   ctx.fillStyle=C_BOARD; ctx.fillRect(0,0,cv._w,cv._h);
@@ -444,12 +575,18 @@ function drawGrid(cv,cols,cs){
   for(r=1;r<ROWS;r++){ctx.moveTo(0,r*cs+0.5);ctx.lineTo(cv._w,r*cs+0.5);}
   ctx.stroke();
 }
-function drawCells(ctx,board,cs){
-  for(var r=0;r<ROWS;r++)for(var c=0;c<board[r].length;c++){var v=board[r][c];if(v)cell(ctx,c*cs,r*cs,cs,PAL[v]);}
+function drawCells(ctx,board,cs,pal){
+  var t=performance.now(); pal=pal||PAL;
+  for(var r=0;r<ROWS;r++)for(var c=0;c<board[r].length;c++){
+    var v=board[r][c]; if(!v)continue;
+    if(v>=9&&POWER_BY_ID[v])powerCell(ctx,c*cs,r*cs,cs,POWERS[POWER_BY_ID[v]],t);
+    else if(v===CELL_FILLED)powerCell(ctx,c*cs,r*cs,cs,POWERS.fill,0);
+    else cell(ctx,c*cs,r*cs,cs,pal[v]||PAL[8]);
+  }
 }
 /* the falling piece and its ghost; mark, if given, outlines the piece in a player's colour (co-op) */
-function drawPiece(ctx,g,cur,cs,mark){
-  var r, c, col=PAL[IDS[cur.t]], gy=cur.y;
+function drawPiece(ctx,g,cur,cs,mark,pal){
+  var r, c, t=performance.now(), col=cur.sp?shimmerCol(t):(pal||PAL)[IDS[cur.t]], gy=cur.y, k=0;
   while(!g.collide(cur.m,cur.x,gy+1))gy++;
   ctx.strokeStyle=mark||col; ctx.globalAlpha=0.55; ctx.lineWidth=2;
   for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
@@ -458,7 +595,8 @@ function drawPiece(ctx,g,cur,cs,mark){
   ctx.globalAlpha=1;
   for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
     if(!cur.m[r][c]||cur.y+r<0)continue;
-    cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,col);
+    if(cur.sp)shimmerCell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,t,k++);
+    else cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,col);
     if(mark){ctx.strokeStyle=mark;ctx.lineWidth=2;ctx.strokeRect((cur.x+c)*cs+1,(cur.y+r)*cs+1,cs-2,cs-2);}
   }
 }
@@ -481,27 +619,111 @@ function drawFx(ctx,g,cs){                       /* hard-drop streak */
   }
   ctx.globalAlpha=1;
 }
+/* power effects on a board: the burst where a power piece settled, the banner, live effects and their countdowns */
+function drawPowerFx(ctx,cv,g,cs){
+  var now=performance.now(), W=cv._w, H=cv._h, P, age, k, i;
+  if(g.fxOn&&g.fxOn('shield')){                   /* shield: a breathing green frame */
+    P=POWERS.shield; var pulse=0.55+0.45*Math.sin(now/220);
+    ctx.save(); ctx.shadowColor=P.col; ctx.shadowBlur=cs*0.8*pulse; ctx.strokeStyle=P.col; ctx.globalAlpha=0.6+0.4*pulse; ctx.lineWidth=Math.max(3,cs*0.16);
+    ctx.strokeRect(2,2,W-4,H-4); ctx.restore();
+  }
+  if(g.fxOn&&g.fxOn('rush')){                     /* rush: streaks racing down both edges */
+    P=POWERS.rush; ctx.save(); ctx.strokeStyle=P.col; ctx.lineWidth=Math.max(2,cs*0.1);
+    for(i=0;i<10;i++){
+      var y=((now*1.4+i*H/10*1.7)%(H+cs*3))-cs*2, x=i%2?cs*0.35:W-cs*0.35;
+      ctx.globalAlpha=0.35+0.25*(i%3)/2; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x,y+cs*2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  if(g.filled){                                    /* fill: the new blocks flash white, then settle */
+    age=now-g.filled.t;
+    if(age>700)g.filled=null;
+    else{ctx.fillStyle='#fff'; ctx.globalAlpha=0.8*(1-age/700); g.filled.cells.forEach(function(h){ctx.fillRect(h[1]*cs,h[0]*cs,cs,cs);}); ctx.globalAlpha=1;}
+  }
+  if(g.blasted){                                   /* blast: a shockwave off the floor */
+    age=now-g.blasted;
+    if(age>600)g.blasted=0;
+    else{
+      k=age/600; P=POWERS.blast;
+      var grad=ctx.createLinearGradient(0,H,0,H-cs*6*k-cs);
+      grad.addColorStop(0,'rgba(255,255,255,'+(0.9*(1-k)).toFixed(2)+')'); grad.addColorStop(0.4,P.col); grad.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.globalAlpha=1-k; ctx.fillStyle=grad; ctx.fillRect(0,H-cs*6*k-cs,W,cs*6*k+cs); ctx.globalAlpha=1;
+    }
+  }
+  if(g.burst){                                     /* the piece settles: a ring and sparks in the power's colour */
+    age=now-g.burst.t;
+    if(age>750)g.burst=null;
+    else{
+      k=age/750; P=POWERS[g.burst.p]; var bx=g.burst.x*cs, by=g.burst.y*cs, ease=1-Math.pow(1-k,3);
+      ctx.save(); ctx.globalAlpha=1-k; ctx.strokeStyle=P.col; ctx.shadowColor=P.col; ctx.shadowBlur=cs;
+      ctx.lineWidth=Math.max(2,cs*0.25*(1-k)); ctx.beginPath(); ctx.arc(bx,by,cs*(0.8+ease*5),0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle=P.col;
+      for(i=0;i<16;i++){
+        var a=i/16*Math.PI*2+i*0.37, d=cs*(0.5+ease*(3+(i%4)));
+        ctx.beginPath(); ctx.arc(bx+Math.cos(a)*d,by+Math.sin(a)*d,Math.max(1.5,cs*0.14*(1-k)),0,Math.PI*2); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+  var badges=[];                                   /* live effects, top left, with seconds left */
+  if(g.effects)POWER_KEYS.forEach(function(key){var left=(g.effects[key]||0)-now; if(left>0)badges.push([key,left]);});
+  badges.forEach(function(b,j){
+    var Pb=POWERS[b[0]], h=Math.max(16,cs*0.9), w=h*2.6, x=cs*0.3, y=cs*0.3+j*(h+4), frac=b[1]/Pb.dur;
+    ctx.save(); ctx.globalAlpha=0.92; ctx.fillStyle='rgba(10,13,18,.75)'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle=Pb.col; ctx.fillRect(x,y+h-3,w*frac,3);
+    ctx.strokeStyle=Pb.col; ctx.lineWidth=1.5; ctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+    ctx.fillStyle=Pb.col; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.font='700 '+Math.round(h*0.62)+'px '+tok('--font-mono','monospace');
+    ctx.fillText(Pb.icon+' '+Math.ceil(b[1]/1000),x+h*0.3,y+h*0.47); ctx.restore();
+  });
+  if(g.banner){                                    /* the big word in the middle */
+    age=now-g.banner.t;
+    if(age>1500)g.banner=null;
+    else{
+      P=POWERS[g.banner.p]; var mode=g.banner.mode;
+      var word=mode==='hit'?P.hit+'!':mode==='block'?'Blocked':mode==='send'?P.name+' →':P.name+(mode==='armed'?'':'!');
+      var sub=mode==='armed'?(P.self?'clear it to use':'clear it to send'):'';
+      var pop=age<180?1.5-0.5*(age/180):1, fade=age>1100?1-(age-1100)/400:1;
+      var size=Math.round(Math.min(cs*2.2,W/(word.length*0.62+1.6))*pop);
+      ctx.save(); ctx.globalAlpha=Math.max(0,fade); ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.translate(W/2,H*0.42);
+      ctx.font='900 '+Math.round(size*0.9)+'px '+tok('--font-display','Impact,sans-serif');
+      ctx.fillStyle=P.col; ctx.shadowColor=P.col; ctx.shadowBlur=cs*1.2;
+      ctx.fillText(P.icon,0,-size*0.95);
+      ctx.font='900 '+size+'px '+tok('--font-display','Impact,sans-serif');
+      ctx.lineWidth=Math.max(3,size*0.12); ctx.strokeStyle='rgba(10,13,18,.9)'; ctx.shadowBlur=0; ctx.strokeText(word.toUpperCase(),0,0);
+      ctx.shadowBlur=cs; ctx.fillText(word.toUpperCase(),0,0);
+      if(sub){
+        ctx.font='700 '+Math.max(10,Math.round(size*0.32))+'px '+tok('--font-mono','monospace'); ctx.shadowBlur=0;
+        ctx.lineWidth=3; ctx.strokeText(sub.toUpperCase(),0,size*0.8); ctx.fillStyle='#fff'; ctx.fillText(sub.toUpperCase(),0,size*0.8);
+      }
+      ctx.restore();
+    }
+  }
+}
 function drawBoard(cv,g,cs){
   var ctx=cv.getContext('2d');
-  drawGrid(cv,g.board[0].length,cs); drawCells(ctx,g.board,cs);
-  if(g.cur&&!g.over)drawPiece(ctx,g,g.cur,cs);
+  drawGrid(cv,g.board[0].length,cs); drawCells(ctx,g.board,cs,g.pal);
+  if(g.cur&&!g.over)drawPiece(ctx,g,g.cur,cs,null,g.pal);
   if(g.pending>0){                          /* garbage meter: solid once it can land, faint while it is still on its way */
     var ph=Math.min(g.pending,ROWS)*cs, ah=Math.min(g.armed(),ROWS)*cs, mw=Math.max(4,cs*0.18);
     ctx.fillStyle=C_DANGER; ctx.globalAlpha=0.4; ctx.fillRect(0,cv._h-ph,mw,ph-ah);
     ctx.globalAlpha=1; ctx.fillRect(0,cv._h-ah,mw,ah);
   }
   drawFx(ctx,g,cs);
+  drawPowerFx(ctx,cv,g,cs);
 }
 /* co-op board: both falling pieces, each outlined in its player's colour */
 function drawCoop(cv,co,cs){
   var ctx=cv.getContext('2d');
-  drawGrid(cv,co.board[0].length,cs); drawCells(ctx,co.board,cs);
+  drawGrid(cv,co.board[0].length,cs); drawCells(ctx,co.board,cs,co.pal);
   for(var i=0;i<2;i++){
     var g=co.p[i];
-    if(g.cur&&!co.over)drawPiece(ctx,g,g.cur,cs,PAL[1+i]);
+    if(g.cur&&!co.over)drawPiece(ctx,g,g.cur,cs,PAL[1+i],co.pal);
     drawFx(ctx,g,cs);
   }
 }
+/* the board turns upside down while Flip is on (a CSS flip on the element around the canvas) */
+function syncFlip(el,g){if(el)el.classList.toggle('flipped',!!(g&&g.fxOn&&g.fxOn('flip')));}
 function drawKO(cv,cs){
   var ctx=cv.getContext('2d');
   ctx.fillStyle=C_SCRIM; ctx.fillRect(0,0,cv._w,cv._h);
@@ -509,27 +731,30 @@ function drawKO(cv,cs){
   ctx.font='900 '+Math.round(cs*4)+'px '+tok('--font-display');
   ctx.fillText('KO',cv._w/2,cv._h/2);
 }
+function drawMini(ctx,t,sp,ox,oy,s,pal,kOff){
+  var m=SHAPES[t], minR=9,maxR=-1,minC=9,maxC=-1,r,c,k=0,now=performance.now();
+  for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c]){minR=Math.min(minR,r);maxR=Math.max(maxR,r);minC=Math.min(minC,c);maxC=Math.max(maxC,c);}
+  var bw=(maxC-minC+1)*s, bh=(maxR-minR+1)*s;
+  ox-=bw/2; oy-=bh/2;
+  for(r=minR;r<=maxR;r++)for(c=minC;c<=maxC;c++)if(m[r][c]){
+    if(sp)shimmerCell(ctx,ox+(c-minC)*s,oy+(r-minR)*s,s,now,(kOff||0)+k++);
+    else cell(ctx,ox+(c-minC)*s,oy+(r-minR)*s,s,(pal||PAL)[IDS[t]]);
+  }
+}
 function drawNext(cv,g,s,count){
   var ctx=cv.getContext('2d');
   ctx.fillStyle=C_BOARD; ctx.fillRect(0,0,cv._w,cv._h);
   for(var q=0;q<(count||2);q++){
     var t=g.queue[q]; if(!t)continue;
-    var m=SHAPES[t], minR=9,maxR=-1,minC=9,maxC=-1,r,c;
-    for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c]){minR=Math.min(minR,r);maxR=Math.max(maxR,r);minC=Math.min(minC,c);maxC=Math.max(maxC,c);}
-    var bw=(maxC-minC+1)*s, bh=(maxR-minR+1)*s;
-    var ox=(cv._w-bw)/2, oy=q*3*s+(3*s-bh)/2;
-    for(r=minR;r<=maxR;r++)for(c=minC;c<=maxC;c++)if(m[r][c])cell(ctx,ox+(c-minC)*s,oy+(r-minR)*s,s,PAL[IDS[t]]);
+    drawMini(ctx,t,g.qsp&&g.qsp[q],cv._w/2,q*3*s+1.5*s,s,g.pal,q*4);
   }
 }
 function drawHold(cv,g,s){
   var ctx=cv.getContext('2d');
   ctx.fillStyle=C_BOARD; ctx.fillRect(0,0,cv._w,cv._h);
   var t=g.held; if(!t)return;
-  var m=SHAPES[t], minR=9,maxR=-1,minC=9,maxC=-1,r,c;
-  for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c]){minR=Math.min(minR,r);maxR=Math.max(maxR,r);minC=Math.min(minC,c);maxC=Math.max(maxC,c);}
-  var ox=(cv._w-(maxC-minC+1)*s)/2, oy=(cv._h-(maxR-minR+1)*s)/2;
   ctx.globalAlpha=g.canHold?1:0.35;
-  for(r=minR;r<=maxR;r++)for(c=minC;c<=maxC;c++)if(m[r][c])cell(ctx,ox+(c-minC)*s,oy+(r-minR)*s,s,PAL[IDS[t]]);
+  drawMini(ctx,t,g.heldSp,cv._w/2,cv._h/2,s,g.pal,0);
   ctx.globalAlpha=1;
 }
 function drawEmptyBoard(cv){

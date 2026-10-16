@@ -67,7 +67,12 @@ h1,h2{margin:0}
 .who em{font:600 .75rem var(--font-mono); letter-spacing:.1em; color:var(--danger); font-style:normal; display:none}
 .panel.away .who em{display:inline}
 .panel.away canvas.board{opacity:.45}
-.row{display:flex; gap:1.2rem; align-items:flex-start}
+.row{display:flex; gap:1.2rem; align-items:flex-start; perspective:1600px}
+.flipper{transition:transform .75s cubic-bezier(.45,-0.25,.35,1.25); transform-style:preserve-3d}
+.flipper.flipped{transform:rotateX(180deg)}
+@media (prefers-reduced-motion:reduce){.flipper{transition:none}}
+.sw{display:inline-flex; gap:.2rem; margin-left:.9rem; vertical-align:middle}
+.sw i{width:.7rem; height:.7rem; border-radius:.15rem; display:inline-block}
 canvas{display:block; border-radius:.3rem; background:var(--board); border:1px solid var(--line)}
 .side{display:flex; flex-direction:column; gap:1rem; width:7.5rem}
 .blk{display:flex; flex-direction:column; gap:.35rem}
@@ -144,7 +149,7 @@ function $(s){return document.querySelector(s);}
 var SEATCOL=[tok('--p1'),tok('--p2')];
 /* The TV only plays the big moments: line clears and garbage landing here, plus KOs, the countdown and the result elsewhere.
    Move, rotate, drop and hold sounds come from each player's phone. */
-var TV_SFX={clear:1,garbage:1};
+var TV_SFX={clear:1,garbage:1,arm:1,power:1,zap:1,block:1};
 
 /* ------------------------------------------------------------- panels */
 var panels=[null,null], cs=24;
@@ -153,13 +158,13 @@ function buildPanel(i,name){
   el.className='panel';
   el.style.setProperty('--c',SEATCOL[i]);
   el.innerHTML='<div class="who"><i></i><span>'+name+'</span><em>Reconnecting</em></div>'+
-    '<div class="row"><canvas class="board"></canvas>'+
+    '<div class="row"><div class="flipper"><canvas class="board"></canvas></div>'+
     '<div class="side"><div class="blk"><div class="lbl">Hold</div><canvas class="hld"></canvas></div><div class="blk"><div class="lbl">Next</div><canvas class="nxt"></canvas></div>'+
     '<div class="blk"><div class="stat"><span class="lbl">Level</span><b class="lv">1</b></div>'+
     '<div class="stat"><span class="lbl">Lines</span><b class="ln">0</b></div>'+
     '<div class="stat"><span class="lbl">Sent</span><b class="sn">0</b></div>'+
     '<div class="stat" hidden><span class="lbl">KOs</span><b class="kn">0</b></div></div></div></div>';
-  var p={el:el,board:el.querySelector('canvas.board'),nxt:el.querySelector('canvas.nxt'),hld:el.querySelector('canvas.hld'),lv:el.querySelector('.lv'),ln:el.querySelector('.ln'),sn:el.querySelector('.sn'),kn:el.querySelector('.kn'),shown:''};
+  var p={el:el,flip:el.querySelector('.flipper'),board:el.querySelector('canvas.board'),nxt:el.querySelector('canvas.nxt'),hld:el.querySelector('canvas.hld'),lv:el.querySelector('.lv'),ln:el.querySelector('.ln'),sn:el.querySelector('.sn'),kn:el.querySelector('.kn'),shown:''};
   return p;
 }
 function layout(){
@@ -195,6 +200,9 @@ var ready=[false,false], conn=[false,false], wins=[0,0], forfeit=[0,0];
 var rules='ko';                    /* 'ko' or 'classic', picked on either phone */
 var mode='versus';                 /* 'versus' or 'coop' (one shared wide board), picked on either phone */
 var co=null, coPanel=null, coopBest=0;
+var powers=true;                   /* power pieces in versus, switched on either phone */
+var packs=['classic','classic'];   /* each player's colour pack, sent by their phone */
+try{if(localStorage.getItem('bd-powers')==='0')powers=false;}catch(e){}
 try{if(localStorage.getItem('bd-mode')==='coop')mode='coop'; coopBest=+localStorage.getItem('bd-coop-best')||0;}catch(e){}
 var koMin=3;                       /* KO match length in minutes, 0 = no limit */
 try{if(localStorage.getItem('bd-rules')==='classic')rules='classic';}catch(e){}
@@ -206,7 +214,7 @@ function setNet(on){
 }
 function bcState(){
   if(!ws||ws.readyState!==1)return;
-  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,mode:mode,coop:match&&match.coop?{lines:co?co.lines:0,best:coopBest}:null,kos:match&&match.ko?match.kos.slice():null}}));
+  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,mode:mode,powers:powers,hits:games.map(function(g){return g?[g.hits,g.lastHit]:null;}),coop:match&&match.coop?{lines:co?co.lines:0,best:coopBest}:null,kos:match&&match.ko?match.kos.slice():null}}));
 }
 function connect(){
   clearTimeout(wsTimer);
@@ -260,6 +268,17 @@ function onPad(seat,m){
     rules=m.v?'ko':'classic';
     try{localStorage.setItem('bd-rules',rules);}catch(e){}
     renderLobby(); bcState();
+  }else if(m.t==='powers'){
+    if(phase!=='lobby'&&phase!=='result')return;
+    powers=!!m.v;
+    try{localStorage.setItem('bd-powers',powers?'1':'0');}catch(e){}
+    renderLobby(); bcState();
+  }else if(m.t==='pack'){
+    if(!PACKS[m.p])return;
+    packs[seat]=m.p;
+    if(games[seat]&&match&&match.cpu!==seat)games[seat].pal=packPal(m.p);   /* takes effect straight away */
+    if(co&&seat===0)co.pal=packPal(m.p);
+    renderLobby();
   }else if(m.t==='mode'){
     if(phase!=='lobby'&&phase!=='result')return;
     mode=m.v?'coop':'versus';
@@ -289,12 +308,16 @@ function renderLobby(){
     var el=$('#seat'+i);
     el.className='seat'+(conn[i]?' conn':'')+(conn[i]&&ready[i]?' ready':'');
     el.querySelector('.st').textContent=!conn[i]?'Waiting for a phone':(ready[i]?'Ready':'Connected');
+    var who=el.querySelector('.who'), sw=who.querySelector('.sw');
+    if(!sw){sw=document.createElement('span');sw.className='sw';sw.setAttribute('aria-hidden','true');who.appendChild(sw);}
+    sw.innerHTML=conn[i]?PACKS[packs[i]].c.slice(0,7).map(function(c){return '<i style="background:'+c+'"></i>';}).join(''):'';
   }
   $('#rules').textContent=mode==='coop'?
     'Mode: Co-op. Both players build on one wide board and clear lines together. The run ends when the stack reaches the top.'+(coopBest?' Best so far: '+coopBest+' lines.':''):
     rules==='ko'?
     'Rules: KO. Topping out clears your board and gives the other player a KO. First to '+KO_TO_WIN+' KOs wins'+(koMin?', or the most KOs after '+koMin+(koMin===1?' minute.':' minutes.'):'. No time limit.'):
     'Rules: Classic. Top out once and you lose.';
+  if(mode!=='coop')$('#rules').textContent+=powers?' Power-ups on: shimmering pieces settle into a power when placed.':' Power-ups off.';
 }
 function seatName(i){return match&&match.cpu===i?'Computer · '+CPU_NAME[match.level]:'Player '+(i+1);}
 function seatTag(i){return match&&match.cpu===i?'CPU':'P'+(i+1);}
@@ -316,13 +339,15 @@ function startMatch(seatList,cpu){
   panels=[null,null];
   seatList.forEach(function(i){
     panels[i]=buildPanel(i,seatName(i));
-    games[i]=new Game(seed);
+    games[i]=new Game(seed,{powers:powers&&!solo});
+    games[i].pal=packPal(match.cpu===i?'classic':packs[i]);
     if(match.cpu===i)bots[i]=new Bot(games[i],match.level);
   });
   [0,1].forEach(function(i){if(panels[i])field.appendChild(panels[i].el);});
   seatList.forEach(function(i){
     var g=games[i], other=1-i;
     g.onSend=function(n){var o=games[other];if(o&&!o.over)o.receive(n);};
+    g.onPower=function(pw){var o=games[other];if(o&&!o.over){o.hit(pw);bcState();}};
     g.sfx=function(n,a){if(TV_SFX[n])SFX.play(n,solo?0:(i===0?-0.6:0.6),a);};
     g.onOver=function(){
       if(phase!=='playing'&&phase!=='countdown')return;
@@ -360,7 +385,7 @@ function startCoop(){
   var seed=Math.floor(Math.random()*2147483647);
   match={seats:[0,1],solo:false,coop:true,t0:performance.now()+COUNTDOWN,winner:null,cpu:null,level:null,ko:false,kos:[0,0],tEnd:Infinity};
   games=[null,null]; bots=[null,null]; panels=[null,null];
-  co=new CoopGame(seed);
+  co=new CoopGame(seed); co.pal=packPal(packs[0]);
   co.sfx=function(i,n,a){if(TV_SFX[n])SFX.play(n,i===0?-0.4:0.4,a);};
   co.onOver=function(){if(phase==='playing'||phase==='countdown')finish(null);};
   coPanel=buildCoopPanel();
@@ -448,7 +473,7 @@ function frame(ts){
     for(var j=0;j<2;j++){
       var p=panels[j], gg=games[j];
       if(!p||!gg)continue;
-      drawBoard(p.board,gg,cs); if(gg.koUntil&&gg.over)drawKO(p.board,cs); drawNext(p.nxt,gg,p.ns,2); drawHold(p.hld,gg,p.ns);
+      drawBoard(p.board,gg,cs); if(gg.koUntil&&gg.over)drawKO(p.board,cs); syncFlip(p.flip,gg); drawNext(p.nxt,gg,p.ns,2); drawHold(p.hld,gg,p.ns);
       var kos=match.kos[j];
       var key=gg.level+'|'+gg.lines+'|'+gg.sent+'|'+kos;
       if(p.shown!==key){p.shown=key;p.lv.textContent=gg.level;p.ln.textContent=gg.lines;p.sn.textContent=gg.sent;p.kn.textContent=kos+' / '+KO_TO_WIN;}

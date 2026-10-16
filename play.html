@@ -64,6 +64,19 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 #local.coop .rail{flex-direction:row; width:auto; align-items:center; gap:10px; order:-1}
 #local.coop .rail .st{margin-top:0; gap:6px}
 #local.coop #oppBox{display:none}
+#local{perspective:1400px}
+.flipper{transition:transform .75s cubic-bezier(.45,-0.25,.35,1.25); transform-style:preserve-3d}
+.flipper.flipped{transform:rotateX(180deg)}
+@media (prefers-reduced-motion:reduce){.flipper{transition:none}}
+details.mine{border:1px solid var(--line); border-radius:12px; padding:0 12px}
+details.mine summary{min-height:48px; display:flex; align-items:center; font:600 13px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim); cursor:pointer}
+details.mine[open]{padding-bottom:12px}
+details.mine > *+*{margin-top:10px}
+.packs{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+.packs .btn{min-height:56px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font:700 14px var(--font-ui); color:var(--fg)}
+.packs .btn[aria-pressed="true"]{border-color:var(--c,var(--accent)); background:var(--line)}
+.packs .sw{display:flex; gap:3px}
+.packs .sw i{width:12px; height:12px; border-radius:3px; display:block}
 #cdNum{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 120px var(--font-display); color:var(--accent); text-shadow:0 2px 0 var(--bg)}
 .hud{font:600 15px var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:.06em; display:flex; gap:14px; align-items:center}
 .hud .low{color:var(--danger)}
@@ -101,28 +114,36 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
         <span class="lbl">Time</span>
         <button class="btn small" data-min="2">2 min</button><button class="btn small" data-min="3">3 min</button><button class="btn small" data-min="5">5 min</button><button class="btn small" data-min="0">None</button>
       </div>
+      <div class="opt" id="powersRow">
+        <span class="lbl">Powers</span>
+        <button class="btn small" data-powers="1" aria-pressed="false">On</button><button class="btn small" data-powers="0" aria-pressed="false">Off</button>
+      </div>
       <p class="rules-note" id="rulesNote"></p>
-      <div class="opt" id="soundRow">
-        <span class="lbl">Sound</span>
-        <button class="btn small" data-sound="1" aria-pressed="false">On</button><button class="btn small" data-sound="0" aria-pressed="false">Off</button>
-      </div>
-      <p class="rules-note" id="soundNote" hidden></p>
-      <div class="opt" id="swipeRow" style="grid-template-columns:64px 1fr auto">
-        <label class="lbl" for="sens">Swipe</label>
-        <input type="range" id="sens" min="1" max="5" step="1" value="3" aria-describedby="sensTxt">
-        <output id="sensTxt" for="sens"></output>
-      </div>
       <button class="btn primary" id="readyBtn">Ready</button>
       <div class="cpu" id="cpuRow" hidden>
         <span class="lbl">Play the computer</span>
         <div><button class="btn small" data-cpu="easy">Easy</button><button class="btn small" data-cpu="normal">Normal</button><button class="btn small" data-cpu="hard">Hard</button></div>
       </div>
       <button class="btn small" id="soloBtn" hidden>Play on my own</button>
+      <details class="mine" id="mine">
+        <summary>Your colours, swipe and sound</summary>
+        <div class="packs" id="packs" role="group" aria-label="Colour pack"></div>
+        <div class="opt" id="swipeRow" style="grid-template-columns:64px 1fr auto">
+          <label class="lbl" for="sens">Swipe</label>
+          <input type="range" id="sens" min="1" max="5" step="1" value="3" aria-describedby="sensTxt">
+          <output id="sensTxt" for="sens"></output>
+        </div>
+        <div class="opt" id="soundRow">
+          <span class="lbl">Sound</span>
+          <button class="btn small" data-sound="1" aria-pressed="false">On</button><button class="btn small" data-sound="0" aria-pressed="false">Off</button>
+        </div>
+        <p class="rules-note" id="soundNote" hidden></p>
+      </details>
     </div>
     <div id="surface" hidden>
       <div class="hint" id="surfHint">Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.</div>
       <div id="local" hidden>
-        <canvas id="myBoard"></canvas>
+        <div class="flipper" id="myFlip"><canvas id="myBoard"></canvas></div>
         <div class="rail">
           <span class="lbl">Hold</span><canvas id="myHold"></canvas>
           <span class="lbl">Next</span><canvas id="myNext"></canvas>
@@ -160,6 +181,8 @@ function setNet(on){$('#net').className='net'+(on?' on':'');$('#netTxt').textCon
 var SENS_LEVELS=[1.5,1.22,1,0.82,0.66], SENS_NAMES=['Lowest','Low','Normal','High','Highest'], sens=3;
 try{var sv=+localStorage.getItem('bd-swipe');if(sv>=1&&sv<=5)sens=sv;}catch(e){}
 function sensK(){return SENS_LEVELS[sens-1];}
+var myPack='classic';                    /* colour pack, kept per phone */
+try{var pk0=localStorage.getItem('bd-pack');if(PACKS[pk0])myPack=pk0;}catch(e){}
 var HAPTICS=true;
 try{if(localStorage.getItem('bd-haptics')==='0')HAPTICS=false;}catch(e){}
 /* Android has navigator.vibrate. iPhones do not, but recent iOS Safari ticks the haptic engine when a native switch control is toggled by a touch, so on those we click a hidden switch instead. It gives one light tick per call whatever the pattern. */
@@ -186,7 +209,7 @@ function connect(){
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.onopen=function(){
     if(wasLive)SFX.reset();           /* a dropped connection usually means the phone slept; start audio afresh on the next tap */
-    wasLive=true; alive=true; setNet(true); ws.send(JSON.stringify({t:'hello',role:'pad',id:myId})); render();
+    wasLive=true; alive=true; setNet(true); ws.send(JSON.stringify({t:'hello',role:'pad',id:myId})); sendMsg({t:'pack',p:myPack}); render();
   };
   ws.onmessage=function(e){
     var m; try{m=JSON.parse(e.data);}catch(x){return;}
@@ -228,11 +251,20 @@ function onKos(a,b){
   if(phoneMode())SFX.play('ko',0);
 }
 
+/* TV mode: when the other player's power lands on you, the phone names it and buzzes */
+var lastHits=null;
+function onHits(h){
+  var mine=h&&(seat===0||seat===1)?h[seat]:null;
+  if(mine&&lastHits&&mine[0]>lastHits[0]&&POWERS[mine[1]]&&!phoneMode()){flash(POWERS[mine[1]].hit);vibe([40,30,40,30,90]);}
+  lastHits=mine;
+}
+
 /* ---------------------------------------------------------- screens */
 function show(el,on){el.hidden=!on;}
 function render(){
   S=currentState();
   onKos(lastKos,S.kos); lastKos=S.kos;
+  onHits(S.hits);
   var c=seat===0||seat===1?SEATCOL[seat]:'var(--dim)';
   document.documentElement.style.setProperty('--c',c);
   $('#chipTxt').textContent=seat===0||seat===1?'Player '+(seat+1):'Block Duel';
@@ -291,7 +323,10 @@ function render(){
   show($('#timeRow'),showRules&&ko&&!coop);
   Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
   $('#rulesNote').textContent=coop?'Build one wide board together and clear lines as a team. Needs both phones; the computer and practice buttons still play versus.':!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
-  show($('#swipeRow'),showReady); show($('#soundRow'),showReady); soundNote(showReady);
+  show($('#mine'),showReady); soundNote(showReady);
+  show($('#powersRow'),showRules&&!coop);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-powers]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-powers')==='1')===(S.powers!==false)));});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-pack]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-pack')===myPack));});
   Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-sound')==='1')===SFX.isOn()));});
   show($('#screenRow'),showReady&&room.tv);
   Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-screen')===room.screen));});
@@ -315,6 +350,23 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function
 Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
   b.addEventListener('click',function(){act({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
 });
+Array.prototype.forEach.call(document.querySelectorAll('[data-powers]'),function(b){
+  b.addEventListener('click',function(){act({t:'powers',v:b.getAttribute('data-powers')==='1'});});
+});
+(function(){                                     /* colour pack buttons, one per pack, each with its swatches */
+  var box=$('#packs');
+  PACK_KEYS.forEach(function(k){
+    var b=document.createElement('button'); b.className='btn small'; b.setAttribute('data-pack',k); b.setAttribute('aria-pressed','false');
+    b.innerHTML='<span class="sw" aria-hidden="true">'+PACKS[k].c.slice(0,7).map(function(c){return '<i style="background:'+c+'"></i>';}).join('')+'</span><span>'+PACKS[k].name+'</span>';
+    b.addEventListener('click',function(){
+      myPack=k; try{localStorage.setItem('bd-pack',k);}catch(e){}
+      sendMsg({t:'pack',p:k});
+      var g=viewGame(); if(g&&!(R.match&&R.match.cpu===seat))g.pal=packPal(k);
+      render();
+    });
+    box.appendChild(b);
+  });
+})();
 Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'),function(b){
   b.addEventListener('click',function(){act({t:'mode',v:b.getAttribute('data-mode')==='coop'});});
 });
@@ -375,9 +427,10 @@ function myGame(){
 }
 
 /* the scorekeeper: the same flow as the TV page, for this phone's own matches and, on player 1's phone, two-phone matches */
-var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,mode:'versus',co:null,coopBest:0,coEv:[],match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
+var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,mode:'versus',powers:true,co:null,coopBest:0,coEv:[],match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
 try{
   if(localStorage.getItem('bd-mode')==='coop')R.mode='coop';
+  if(localStorage.getItem('bd-powers')==='0')R.powers=false;
   R.coopBest=+localStorage.getItem('bd-coop-best')||0;
   if(localStorage.getItem('bd-rules')==='classic')R.rules='classic';
   var km=localStorage.getItem('bd-komin'); if(km!==null&&KO_MINUTES.indexOf(+km)>=0)R.koMin=+km;
@@ -387,7 +440,7 @@ function refState(){
   var m=R.match;
   return {phase:R.phase,ready:R.ready.slice(),conn:refConn(),wins:R.wins.slice(),winner:m?m.winner:null,solo:!!(m&&m.solo),
     cpu:m&&m.cpu!=null?{seat:m.cpu,level:m.level}:null,rules:R.rules,koMin:R.koMin,kos:m&&m.ko?m.kos.slice():null,
-    mode:R.mode,coop:m&&m.coop?{lines:R.co?R.co.lines:0,best:R.coopBest}:null,
+    mode:R.mode,powers:R.powers,coop:m&&m.coop?{lines:R.co?R.co.lines:0,best:R.coopBest}:null,
     seats:m?m.seats.filter(function(i){return i!==m.cpu;}):null};
 }
 function push(){
@@ -400,6 +453,7 @@ function push(){
 function refPad(from,o){
   if(R.phase!=='lobby'&&R.phase!=='result')return;
   if(o.t==='rules'){R.rules=o.v?'ko':'classic';try{localStorage.setItem('bd-rules',R.rules);}catch(e){} push();}
+  else if(o.t==='powers'){R.powers=!!o.v;try{localStorage.setItem('bd-powers',R.powers?'1':'0');}catch(e){} push();}
   else if(o.t==='mode'){R.mode=o.v?'coop':'versus';try{localStorage.setItem('bd-mode',R.mode);}catch(e){} push();}
   else if(o.t==='kotime'){
     if(KO_MINUTES.indexOf(o.min)<0)return;
@@ -419,10 +473,12 @@ function refStart(list,cpu){
   m.tEnd=m.ko&&R.koMin?m.t0+R.koMin*60000:Infinity;
   var kind=solo?R.kind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between a friend and the computer */
   if(kind!==R.kind){R.wins=[0,0];R.kind=kind;}
-  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null; R.co=null;
+  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null; R.co=null; R.seenHits=0;
   list.forEach(function(i){
     if(i===remote)return;
-    var g=R.games[i]=new Game(m.seed);
+    var g=R.games[i]=new Game(m.seed,{powers:R.powers&&!solo});
+    g.pal=packPal(i===seat?myPack:'classic');
+    g.onPower=function(pw){var o=1-i; if(o===remote)relay({k:'pow',p:pw}); else if(R.games[o]&&!R.games[o].over)R.games[o].hit(pw);};
     if(m.cpu===i)R.bots[i]=new Bot(g,m.level);
     else g.sfx=function(n,a){SFX.play(n,0,a);};
     g.onSend=function(n){refSend(i,n);};
@@ -438,7 +494,7 @@ function refStartCoop(){
   var m=R.match={seats:[0,1],solo:false,coop:true,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
     cpu:null,level:null,ko:false,kos:[0,0],remote:1-seat,lastBeep:0,tEnd:Infinity};
   R.games=[null,null]; R.bots=[null,null]; opp=null; G=null; R.coEv=[];
-  var co=R.co=new CoopGame(m.seed);
+  var co=R.co=new CoopGame(m.seed); co.pal=packPal(seat===0?myPack:'classic');
   co.sfx=function(i,n,a){
     if(i===seat||n==='clear')SFX.play(n,0,a);          /* the other player's moves sound on their own phone */
     if(n==='clear'||n==='lock')R.coEv.push(n);
@@ -520,7 +576,9 @@ function guestSync(o){
   if(mine&&live){
     var now=performance.now();
     if(!G||G.seed!==o.seed){
-      var g=new Game(o.seed);
+      var g=new Game(o.seed,{powers:!!s.powers});
+      g.pal=packPal(myPack);
+      g.onPower=function(pw){relay({k:'pow',p:pw});};
       G={game:g,seed:o.seed,t0:now+(+o.cd||0),tEnd:Infinity,lastBeep:0,went:false};
       opp=null;
       g.sfx=function(n,a){SFX.play(n,0,a);};
@@ -556,12 +614,14 @@ function onPeer(from,o){
     G.snap=o;
     (Array.isArray(o.ev)?o.ev:[]).forEach(function(n){if(n==='clear')SFX.play('clear',0,1);});
   }
+  else if(o.k==='pow'&&typeof o.p==='string'&&POWERS[o.p]){var hg=myGame()||viewGame(); if(hg&&!hg.over)hg.hit(o.p);}
   else if(o.k==='snap'){opp=o; if(seat===0&&R.match&&R.match.remote===from)R.remoteSent=o.sent|0;}
 }
 function onRoom(m){
   var wasScreen=room.screen, wasPeer=peerOn();
   room={seats:Array.isArray(m.seats)?m.seats:[null,null],tv:!!m.tv,screen:m.screen==='phone'?'phone':'tv'};
   var peer=peerOn(), fresh=peer&&(!wasPeer||wasScreen!=='phone');
+  if(room.screen==='tv'&&wasScreen!=='tv')sendMsg({t:'pack',p:myPack});   /* the TV draws this phone's board in its colours */
   if(phoneMode()){
     if(seat===1){
       if(fresh)relay({k:'hello'});
@@ -580,6 +640,7 @@ function onRoom(m){
 
 /* the board view */
 var cvMy=$('#myBoard'), cvHold=$('#myHold'), cvNext=$('#myNext'), cvOpp=$('#oppBoard'), lcs=20, lns=11, ocs=8, hudTxt='';
+function clearFlip(){syncFlip($('#myFlip'),null);}
 function coopShown(){return !!((G&&G.coop)||(R.match&&R.match.coop&&R.co));}
 function layoutLocal(){
   var r=surf.getBoundingClientRect(); if(!r.width)return;
@@ -601,13 +662,13 @@ function layoutLocal(){
 function snapOf(g){
   var grid=g.board.map(function(row){return row.slice();}), cur=g.cur, r, c, b='';
   if(cur&&!g.over)for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++)if(cur.m[r][c]&&cur.y+r>=0)grid[cur.y+r][cur.x+c]=IDS[cur.t];
-  for(r=0;r<ROWS;r++)b+=grid[r].join('');
-  return {k:'snap',b:b,p:g.pending,a:g.armed(),sent:g.sent,ko:!!(g.over&&g.koUntil)};
+  for(r=0;r<ROWS;r++)b+=grid[r].map(function(v){return v.toString(36);}).join('');
+  return {k:'snap',b:b,p:g.pending,a:g.armed(),sent:g.sent,ko:!!(g.over&&g.koUntil),pk:myPack};
 }
 function snapView(o){
   var board=[], r, c;
-  for(r=0;r<ROWS;r++){var row=[];for(c=0;c<COLS;c++)row.push(Math.min(8,+o.b.charAt(r*COLS+c)||0));board.push(row);}
-  return {board:board,cur:null,over:!!o.ko,koUntil:o.ko?1:0,pending:Math.max(0,o.p|0),armed:function(){return Math.max(0,o.a|0);},fx:null};
+  for(r=0;r<ROWS;r++){var row=[];for(c=0;c<COLS;c++){var v=parseInt(o.b.charAt(r*COLS+c),36)||0;row.push(v>15?0:v);}board.push(row);}
+  return {board:board,cur:null,pal:packPal(o.pk),over:!!o.ko,koUntil:o.ko?1:0,pending:Math.max(0,o.p|0),armed:function(){return Math.max(0,o.a|0);},fx:null};
 }
 /* what player 2 draws in phones-only co-op: the board as player 1's phone last sent it */
 function coopFromSnap(o){
@@ -621,6 +682,7 @@ function coopFromSnap(o){
   return {board:board,over:false,p:[lane(cs2[0]),lane(cs2[1])]};
 }
 function drawCoopLocal(ts){
+  clearFlip();
   var view, mine, lines, level, t0;
   if(G&&G.coop){
     t0=G.t0;
@@ -638,6 +700,8 @@ function drawLocal(ts){
   if(coopShown()){drawCoopLocal(ts);return;}
   $('#statB').textContent='Sent';
   var g=viewGame(); if(!g)return;
+  syncFlip($('#myFlip'),g);
+  if(g.hits>(G?G.seenHits||0:R.seenHits||0)){vibe([40,30,40,30,90]); if(G)G.seenHits=g.hits; else R.seenHits=g.hits;}
   drawBoard(cvMy,g,lcs); if(g.over&&g.koUntil)drawKO(cvMy,lcs);
   drawHold(cvHold,g,lns); drawNext(cvNext,g,lns,2);
   $('#myLines').textContent=g.lines; $('#mySent').textContent=g.sent;
