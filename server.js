@@ -345,8 +345,8 @@ function handle(conn) {
         seats.forEach((s) => { if (s) send(s.conn, { t: 'tv', m: m.m }); });
       }
     } else if (role === 'pad') {
-      if ((m.t === 'in' && typeof m.k === 'string' && m.k.length <= 8) || m.t === 'ready' || m.t === 'rules') {
-        send(tv, { t: 'pad', seat, m: { t: m.t, k: m.k, v: !!m.v, solo: !!m.solo, cpu: ['easy', 'normal', 'hard'].includes(m.cpu) ? m.cpu : undefined } });
+      if ((m.t === 'in' && typeof m.k === 'string' && m.k.length <= 8) || m.t === 'ready' || m.t === 'rules' || m.t === 'kotime') {
+        send(tv, { t: 'pad', seat, m: { t: m.t, k: m.k, v: !!m.v, solo: !!m.solo, cpu: ['easy', 'normal', 'hard'].includes(m.cpu) ? m.cpu : undefined, min: Number.isInteger(m.min) ? m.min : undefined } });
       }
     }
   };

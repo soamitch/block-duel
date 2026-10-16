@@ -29,7 +29,7 @@ header{display:flex; justify-content:space-between; align-items:center; gap:12px
 .net{font:600 12px var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--dim); display:flex; gap:6px; align-items:center}
 .net i{width:8px; height:8px; border-radius:50%; background:var(--danger); display:inline-block}
 .net.on i{background:var(--good)}
-main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
+main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overflow-y:auto}
 .msg{display:flex; flex-direction:column; gap:8px; padding-top:8vh}
 .msg h1{margin:0; font:900 44px/1 var(--font-display); text-transform:uppercase; letter-spacing:.02em; text-wrap:balance}
 .msg p{margin:0; color:var(--dim); font-size:16px; max-width:34ch}
@@ -41,9 +41,12 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
 .cpu .lbl{font:600 12px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim)}
 .cpu div{display:grid; grid-template-columns:repeat(3,1fr); gap:8px}
 .cpu .btn{color:var(--fg)}
-.rules{display:grid; grid-template-columns:auto 1fr 1fr; gap:8px; align-items:center}
-.rules .lbl{font:600 12px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim); padding-right:4px}
-.rules .btn[aria-pressed="true"]{color:var(--fg); border-color:var(--c,var(--accent)); background:var(--line)}
+.opt{display:grid; grid-template-columns:64px repeat(var(--n,2),1fr); gap:8px; align-items:center}
+.opt .lbl{font:600 12px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim)}
+.opt .btn.small{min-height:44px}
+.opt .btn[aria-pressed="true"]{color:var(--fg); border-color:var(--c,var(--accent)); background:var(--line)}
+.opt input[type=range]{width:100%; height:44px; margin:0; accent-color:var(--c,var(--accent)); touch-action:pan-x}
+.opt output{font:600 13px var(--font-mono); color:var(--fg); text-align:right; min-width:5.5em}
 .rules-note{margin:0; color:var(--dim); font-size:14px}
 .btn:active{filter:brightness(.9)}
 .btn:focus-visible,.key:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
@@ -67,11 +70,20 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
       <p id="sub"></p>
     </div>
     <div class="actions" id="actions" hidden>
-      <div class="rules" id="rulesRow">
+      <div class="opt" id="rulesRow">
         <span class="lbl">Rules</span>
         <button class="btn small" data-rules="ko" aria-pressed="false">KO</button><button class="btn small" data-rules="classic" aria-pressed="false">Classic</button>
       </div>
+      <div class="opt" id="timeRow" style="--n:4">
+        <span class="lbl">Time</span>
+        <button class="btn small" data-min="2">2 min</button><button class="btn small" data-min="3">3 min</button><button class="btn small" data-min="5">5 min</button><button class="btn small" data-min="0">None</button>
+      </div>
       <p class="rules-note" id="rulesNote"></p>
+      <div class="opt" id="swipeRow" style="grid-template-columns:64px 1fr auto">
+        <label class="lbl" for="sens">Swipe</label>
+        <input type="range" id="sens" min="1" max="5" step="1" value="3" aria-describedby="sensTxt">
+        <output id="sensTxt" for="sens"></output>
+      </div>
       <button class="btn primary" id="readyBtn">Ready</button>
       <div class="cpu" id="cpuRow" hidden>
         <span class="lbl">Play the computer</span>
@@ -92,7 +104,7 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px}
 function $(s){return document.querySelector(s);}
 var SEATCOL=['var(--p1)','var(--p2)'];
 var ws=null, seat=-1, retry=0, noRetry=false, alive=false;
-var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false,cpu:null,rules:'ko',kos:null};
+var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false,cpu:null,rules:'ko',koMin:3,kos:null};
 
 /* a stable id so a refresh keeps the same seat */
 var myId='';
@@ -103,6 +115,10 @@ if(!myId){
 }
 
 function setNet(on){$('#net').className='net'+(on?' on':'');$('#netTxt').textContent=on?'Live':'Offline';}
+/* Swipe sensitivity is kept per phone. Higher levels need shorter drags per step and gentler flicks. */
+var SENS_LEVELS=[1.5,1.22,1,0.82,0.66], SENS_NAMES=['Lowest','Low','Normal','High','Highest'], sens=3;
+try{var sv=+localStorage.getItem('bd-swipe');if(sv>=1&&sv<=5)sens=sv;}catch(e){}
+function sensK(){return SENS_LEVELS[sens-1];}
 var HAPTICS=true;
 try{if(localStorage.getItem('bd-haptics')==='0')HAPTICS=false;}catch(e){}
 /* Android has navigator.vibrate. iPhones do not, but recent iOS Safari ticks the haptic engine when a native switch control is toggled by a touch, so on those we click a hidden switch instead. It gives one light tick per call whatever the pattern. */
@@ -200,7 +216,11 @@ function render(){
   var showRules=showReady&&!(S.phase==='result'&&S.solo);
   show($('#rulesRow'),showRules); show($('#rulesNote'),showRules);
   Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-rules')===(S.rules||'ko')));});
-  $('#rulesNote').textContent=S.rules==='classic'?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs, or most KOs in 3 minutes.';
+  var ko=S.rules!=='classic', km=S.koMin==null?3:S.koMin;
+  show($('#timeRow'),showRules&&ko);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
+  $('#rulesNote').textContent=!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
+  show($('#swipeRow'),showReady);
   show($('#surface'),playing);
   $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.';
 }
@@ -214,6 +234,15 @@ $('#soloBtn').addEventListener('click',function(){sendMsg({t:'ready',v:true,solo
 Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
   b.addEventListener('click',function(){sendMsg({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
 });
+Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){
+  b.addEventListener('click',function(){sendMsg({t:'kotime',min:+b.getAttribute('data-min')});});
+});
+function showSens(){$('#sens').value=sens;$('#sensTxt').textContent=SENS_NAMES[sens-1];}
+$('#sens').addEventListener('input',function(){
+  sens=+this.value; showSens(); vibe(8);
+  try{localStorage.setItem('bd-swipe',String(sens));}catch(e){}
+});
+showSens();
 Array.prototype.forEach.call(document.querySelectorAll('[data-cpu]'),function(b){
   b.addEventListener('click',function(){sendMsg({t:'ready',v:true,cpu:b.getAttribute('data-cpu')});});
 });
@@ -243,7 +272,7 @@ surf.addEventListener('pointermove',function(e){
     sw.mode=(Math.abs(ty)>Math.abs(tx)*1.15)?'v':'h';
     if(sw.mode==='v'){sw.ax=e.clientX; sw.ay=e.clientY;}   /* sideways drags keep counting from the touch-down point, so the first step is not delayed */
   }
-  var hs=26, vs=34;
+  var hs=26*sensK(), vs=34*sensK();
   var dx=e.clientX-sw.ax, dy=e.clientY-sw.ay;
   if(sw.mode==='h'){
     while(dx>=hs){key('R');sw.ax+=hs;dx-=hs;}
@@ -260,8 +289,9 @@ function swEnd(e){
   var dx=e.clientX-s.x0, dy=e.clientY-s.y0, dt=Math.max(1,performance.now()-s.t0);
   if(Math.hypot(dx,dy)<12&&dt<300){key('U');flash('Turn');return;}
   var h0=s.hist[0], vy=(e.clientY-h0.y)/Math.max(1,performance.now()-h0.t);
-  if(s.mode==='v'&&dy>60&&vy>0.65){key('H');flash('Drop');}
-  else if(s.mode==='v'&&dy<-60&&vy<-0.55){key('C');flash('Hold');}
+  var k=sensK();
+  if(s.mode==='v'&&dy>60*k&&vy>0.65*k){key('H');flash('Drop');}
+  else if(s.mode==='v'&&dy<-60*k&&vy<-0.55*k){key('C');flash('Hold');}
 }
 surf.addEventListener('pointerup',swEnd);
 surf.addEventListener('pointercancel',swEnd);
