@@ -31,14 +31,19 @@ var KICKS=[[0,0],[-1,0],[1,0],[-2,0],[2,0],[0,-1],[-1,-1],[1,-1]];
 function rot(m){var n=m.length,o=[],r,c;for(r=0;r<n;r++)o.push(new Array(n).fill(0));for(r=0;r<n;r++)for(c=0;c<n;c++)o[c][n-1-r]=m[r][c];return o;}
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
-function Game(seed){
-  this.board=[]; for(var r=0;r<ROWS;r++)this.board.push(new Array(COLS).fill(0));
+/* o (optional): cols, spawnAt/spawnW (the columns a new piece is centred over), shared (an object whose .board this lane uses
+   instead of its own; co-op), noSpawn (the caller spawns the first piece). */
+function Game(seed,o){
+  o=o||{};
+  this.cols=o.cols||COLS; this.spawnAt=o.spawnAt||0; this.spawnW=o.spawnW||this.cols;
+  if(o.shared)Object.defineProperty(this,'board',{get:function(){return o.shared.board;},set:function(v){o.shared.board=v;}});
+  else{this.board=[]; for(var r=0;r<ROWS;r++)this.board.push(new Array(this.cols).fill(0));}
   this.rng=mulberry32(seed); this.bag=[]; this.queue=[]; this.cur=null;
   this.pending=0; this.incoming=[]; this.lines=0; this.sent=0; this.over=false; this.level=1;
   this.lastFall=0; this.groundAt=null; this.resets=0; this.fx=null; this.started=false;
   this.held=null; this.canHold=true; this.sfx=function(){};
-  this.onSend=function(){}; this.onOver=function(){};
-  this.spawn();
+  this.onSend=function(){}; this.onOver=function(){}; this.onLock=function(){};
+  if(!o.noSpawn)this.spawn();
 }
 Game.prototype.refill=function(){
   while(this.queue.length<5){
@@ -54,7 +59,7 @@ function collideOn(board,m,x,y){
   for(var r=0;r<m.length;r++)for(var c=0;c<m[r].length;c++){
     if(!m[r][c])continue;
     var nx=x+c, ny=y+r;
-    if(nx<0||nx>=COLS||ny>=ROWS)return true;
+    if(nx<0||nx>=board[0].length||ny>=ROWS)return true;
     if(ny>=0&&board[ny][nx])return true;
   }
   return false;
@@ -64,7 +69,7 @@ Game.prototype.spawn=function(forced){
   var t=forced;
   if(!t){this.refill(); t=this.queue.shift(); this.refill();}
   var m=SHAPES[t].map(function(r){return r.slice();});
-  this.cur={t:t,m:m,x:Math.floor((COLS-m.length)/2),y:t==='I'?-1:0};
+  this.cur={t:t,m:m,x:this.spawnAt+Math.floor((this.spawnW-m.length)/2),y:t==='I'?-1:0};
   this.groundAt=null; this.resets=0; this.lastFall=performance.now();
   return !this.collide(this.cur.m,this.cur.x,this.cur.y);
 };
@@ -111,11 +116,11 @@ Game.prototype.armed=function(){          /* rows whose delay has run out */
   return a;
 };
 Game.prototype.addGarbage=function(k){
-  var topOut=false, hole=Math.floor(Math.random()*COLS);   /* one shared hole per batch: easier to dig, so games run longer */
+  var topOut=false, hole=Math.floor(Math.random()*this.cols);   /* one shared hole per batch: easier to dig, so games run longer */
   for(var i=0;i<k;i++){
     var out=this.board.shift();
     if(out.some(function(v){return v;}))topOut=true;
-    var row=new Array(COLS).fill(8); row[hole]=0;
+    var row=new Array(this.cols).fill(8); row[hole]=0;
     this.board.push(row);
   }
   return topOut;
@@ -131,10 +136,11 @@ Game.prototype.lock=function(){
   if(topOut){this.die();return;}
   var kept=this.board.filter(function(row){return !row.every(function(v){return v;});});
   var n=ROWS-kept.length;
-  while(kept.length<ROWS)kept.unshift(new Array(COLS).fill(0));
+  while(kept.length<ROWS)kept.unshift(new Array(this.cols).fill(0));
   this.board=kept;
+  if(n)this.lines+=n;
+  this.onLock(n);
   if(n){
-    this.lines+=n;
     var s=this.cancel(GARBAGE_TABLE[Math.min(n,GARBAGE_TABLE.length-1)]);
     if(s>0){this.sent+=s; this.onSend(s);}
     this.sfx('clear',n);
@@ -173,13 +179,61 @@ Game.prototype.apply=function(k){
 Game.prototype.tick=function(ts,t0){
   if(this.over)return;
   if(!this.started){this.started=true;this.lastFall=ts;}
-  this.level=1+Math.floor(this.lines/LEVEL_EVERY_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS);
+  this.level=this.levelOverride||(1+Math.floor(this.lines/LEVEL_EVERY_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS));
   var iv=Math.max(GRAVITY_MIN,GRAVITY_START-(this.level-1)*GRAVITY_STEP), c=this.cur;
   if(ts-this.lastFall>=iv){this.lastFall=ts;if(!this.collide(c.m,c.x,c.y+1))c.y++;}
   if(this.collide(c.m,c.x,c.y+1)){
     if(this.groundAt==null)this.groundAt=ts;
     else if(ts-this.groundAt>=LOCK_MS)this.lock();
   }else this.groundAt=null;
+};
+
+/* ------------------------------------------------------------- co-op */
+/* Co-op: both players drop pieces into one COOP_COLS-wide board and clear lines together. Each player is a Game lane that shares
+   the board, so moving, rotating, holding and locking work as in versus. Falling pieces pass through each other and only meet the
+   board; when one locks where the other is falling, the other is lifted clear. Each lane spawns over its own half of the board.
+   Speed rises with lines and time; the run ends when the stack tops out. */
+var COOP_COLS=16, COOP_LEVEL_LINES=12;
+function CoopGame(seed){
+  var co=this, r;
+  this.board=[]; for(r=0;r<ROWS;r++)this.board.push(new Array(COOP_COLS).fill(0));
+  this.lines=0; this.level=1; this.over=false; this.onOver=function(){}; this.sfx=function(){};
+  this.p=[0,1].map(function(i){
+    var half=COOP_COLS/2, g=new Game(seed+i,{cols:COOP_COLS,shared:co,spawnAt:i*half,spawnW:half});
+    g.seat=i;
+    g.sfx=function(n,a){co.sfx(i,n,a);};
+    g.onLock=function(n){co.locked(i,n);};
+    g.onOver=function(){co.die();};
+    return g;
+  });
+}
+CoopGame.prototype.locked=function(i,n){
+  var co=this;
+  if(n){this.lines+=n;}
+  this.p.forEach(function(g){g.lines=co.lines;});
+  var o=this.p[1-i], c=o.cur;                       /* the piece just placed (or rows shifting down) may cover the other falling piece: lift it clear */
+  if(!c||o.over)return;
+  while(collideOn(this.board,c.m,c.x,c.y)&&c.y>-4)c.y--;
+  if(collideOn(this.board,c.m,c.x,c.y))this.die();
+};
+CoopGame.prototype.die=function(){
+  if(this.over)return;
+  this.over=true; this.p.forEach(function(g){g.over=true;});
+  this.onOver();
+};
+CoopGame.prototype.apply=function(i,k){
+  var g=this.p[i]; if(this.over||!g||g.over)return;
+  g.apply(k);
+};
+CoopGame.prototype.tick=function(ts,t0){
+  if(this.over)return;
+  this.level=1+Math.floor(this.lines/COOP_LEVEL_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS);
+  for(var i=0;i<2;i++){
+    if(this.over)return;
+    var g=this.p[i];
+    g.levelOverride=this.level;
+    g.tick(ts,t0);
+  }
 };
 
 /* ------------------------------------------------------------- computer player */
@@ -382,50 +436,70 @@ function cell(ctx,x,y,s,col){
   ctx.fillStyle=C_SHINE; ctx.fillRect(x+0.5,y+0.5,s-1,hl);
   ctx.fillStyle=C_SHADE; ctx.fillRect(x+0.5,y+s-0.5-sh,s-1,sh);
 }
-function drawBoard(cv,g,cs){
+function drawGrid(cv,cols,cs){
   var ctx=cv.getContext('2d'), r, c;
   ctx.fillStyle=C_BOARD; ctx.fillRect(0,0,cv._w,cv._h);
   ctx.strokeStyle=C_GRID; ctx.lineWidth=1; ctx.beginPath();
-  for(c=1;c<COLS;c++){ctx.moveTo(c*cs+0.5,0);ctx.lineTo(c*cs+0.5,cv._h);}
+  for(c=1;c<cols;c++){ctx.moveTo(c*cs+0.5,0);ctx.lineTo(c*cs+0.5,cv._h);}
   for(r=1;r<ROWS;r++){ctx.moveTo(0,r*cs+0.5);ctx.lineTo(cv._w,r*cs+0.5);}
   ctx.stroke();
-  for(r=0;r<ROWS;r++)for(c=0;c<COLS;c++){var v=g.board[r][c];if(v)cell(ctx,c*cs,r*cs,cs,PAL[v]);}
-  var cur=g.cur;
-  if(cur&&!g.over){
-    var gy=cur.y; while(!g.collide(cur.m,cur.x,gy+1))gy++;
-    ctx.strokeStyle=PAL[IDS[cur.t]]; ctx.globalAlpha=0.55; ctx.lineWidth=2;
-    for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
-      if(cur.m[r][c]&&gy+r>=0)ctx.strokeRect((cur.x+c)*cs+2,(gy+r)*cs+2,cs-4,cs-4);
-    }
-    ctx.globalAlpha=1;
-    for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
-      if(cur.m[r][c]&&cur.y+r>=0)cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,PAL[IDS[cur.t]]);
-    }
+}
+function drawCells(ctx,board,cs){
+  for(var r=0;r<ROWS;r++)for(var c=0;c<board[r].length;c++){var v=board[r][c];if(v)cell(ctx,c*cs,r*cs,cs,PAL[v]);}
+}
+/* the falling piece and its ghost; mark, if given, outlines the piece in a player's colour (co-op) */
+function drawPiece(ctx,g,cur,cs,mark){
+  var r, c, col=PAL[IDS[cur.t]], gy=cur.y;
+  while(!g.collide(cur.m,cur.x,gy+1))gy++;
+  ctx.strokeStyle=mark||col; ctx.globalAlpha=0.55; ctx.lineWidth=2;
+  for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
+    if(cur.m[r][c]&&gy+r>=0)ctx.strokeRect((cur.x+c)*cs+2,(gy+r)*cs+2,cs-4,cs-4);
   }
+  ctx.globalAlpha=1;
+  for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
+    if(!cur.m[r][c]||cur.y+r<0)continue;
+    cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,col);
+    if(mark){ctx.strokeStyle=mark;ctx.lineWidth=2;ctx.strokeRect((cur.x+c)*cs+1,(cur.y+r)*cs+1,cs-2,cs-2);}
+  }
+}
+function drawFx(ctx,g,cs){                       /* hard-drop streak */
+  if(!g.fx)return;
+  var age=performance.now()-g.fx.t;
+  if(age>=240){g.fx=null;return;}
+  var k=1-age/240, fm=g.fx.m, rr, cc2;
+  ctx.fillStyle=g.fx.col;
+  for(cc2=0;cc2<fm[0].length;cc2++){
+    var top=-1;
+    for(rr=0;rr<fm.length;rr++)if(fm[rr][cc2]){top=rr;break;}
+    if(top<0)continue;
+    var ty=Math.max(0,(g.fx.y0+top)*cs), by=(g.fx.y1+top)*cs;
+    if(by>ty){ctx.globalAlpha=0.38*k;ctx.fillRect((g.fx.x+cc2)*cs+2,ty,cs-4,by-ty);}
+  }
+  ctx.fillStyle=C_FG; ctx.globalAlpha=0.55*k;
+  for(rr=0;rr<fm.length;rr++)for(cc2=0;cc2<fm[rr].length;cc2++){
+    if(fm[rr][cc2]&&g.fx.y1+rr>=0)ctx.fillRect((g.fx.x+cc2)*cs,(g.fx.y1+rr)*cs,cs,cs);
+  }
+  ctx.globalAlpha=1;
+}
+function drawBoard(cv,g,cs){
+  var ctx=cv.getContext('2d');
+  drawGrid(cv,g.board[0].length,cs); drawCells(ctx,g.board,cs);
+  if(g.cur&&!g.over)drawPiece(ctx,g,g.cur,cs);
   if(g.pending>0){                          /* garbage meter: solid once it can land, faint while it is still on its way */
     var ph=Math.min(g.pending,ROWS)*cs, ah=Math.min(g.armed(),ROWS)*cs, mw=Math.max(4,cs*0.18);
     ctx.fillStyle=C_DANGER; ctx.globalAlpha=0.4; ctx.fillRect(0,cv._h-ph,mw,ph-ah);
     ctx.globalAlpha=1; ctx.fillRect(0,cv._h-ah,mw,ah);
   }
-  if(g.fx){
-    var age=performance.now()-g.fx.t;
-    if(age>=240)g.fx=null;
-    else{
-      var k=1-age/240, fm=g.fx.m, rr, cc2;
-      ctx.fillStyle=g.fx.col;
-      for(cc2=0;cc2<fm[0].length;cc2++){
-        var top=-1;
-        for(rr=0;rr<fm.length;rr++)if(fm[rr][cc2]){top=rr;break;}
-        if(top<0)continue;
-        var ty=Math.max(0,(g.fx.y0+top)*cs), by=(g.fx.y1+top)*cs;
-        if(by>ty){ctx.globalAlpha=0.38*k;ctx.fillRect((g.fx.x+cc2)*cs+2,ty,cs-4,by-ty);}
-      }
-      ctx.fillStyle=C_FG; ctx.globalAlpha=0.55*k;
-      for(rr=0;rr<fm.length;rr++)for(cc2=0;cc2<fm[rr].length;cc2++){
-        if(fm[rr][cc2]&&g.fx.y1+rr>=0)ctx.fillRect((g.fx.x+cc2)*cs,(g.fx.y1+rr)*cs,cs,cs);
-      }
-      ctx.globalAlpha=1;
-    }
+  drawFx(ctx,g,cs);
+}
+/* co-op board: both falling pieces, each outlined in its player's colour */
+function drawCoop(cv,co,cs){
+  var ctx=cv.getContext('2d');
+  drawGrid(cv,co.board[0].length,cs); drawCells(ctx,co.board,cs);
+  for(var i=0;i<2;i++){
+    var g=co.p[i];
+    if(g.cur&&!co.over)drawPiece(ctx,g,g.cur,cs,PAL[1+i]);
+    drawFx(ctx,g,cs);
   }
 }
 function drawKO(cv,cs){

@@ -73,6 +73,11 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 .blk{display:flex; flex-direction:column; gap:.35rem}
 .stat{display:flex; justify-content:space-between; align-items:baseline}
 .stat b{font:600 1.5rem var(--font-mono)}
+.panel.coop .row{gap:1.2rem}
+.panel.coop .side .who{font-size:1.2rem}
+.panel.coop .side .who i{background:var(--pc)}
+.coopbar{display:flex; gap:2.4rem; justify-content:center; font:600 1.1rem var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--dim)}
+.coopbar b{color:var(--fg); font-size:1.4rem; margin-left:.5rem}
 
 #count{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; font:900 22rem/1 var(--font-display); color:var(--accent); pointer-events:none; text-shadow:0 .1rem 0 var(--bg); z-index:3}
 #result{position:fixed; inset:0; background:var(--scrim); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1.2rem; text-align:center; z-index:4}
@@ -164,7 +169,13 @@ function layout(){
   var gap=4*rem, pad=4*rem;
   var byH=(H-9*rem)/ROWS;
   var byW=(W-pad-gap-2*perPanelExtra)/(2*COLS);
+  if(match&&match.coop)byW=(W-pad-2*perPanelExtra)/COOP_COLS;
   cs=Math.max(10,Math.floor(Math.min(byH,byW)));
+  if(coPanel){
+    setCanvas(coPanel.board,COOP_COLS*cs,ROWS*cs);
+    var cns=Math.max(8,Math.floor(cs*0.62)); coPanel.ns=cns;
+    for(var k=0;k<2;k++){setCanvas(coPanel.nxt[k],Math.ceil(7.5*rem),Math.ceil(cns*6));setCanvas(coPanel.hld[k],Math.ceil(7.5*rem),Math.ceil(cns*3));}
+  }
   panels.forEach(function(p){
     if(!p)return;
     setCanvas(p.board,COLS*cs,ROWS*cs);
@@ -182,6 +193,9 @@ var phase='lobby';                 /* lobby, countdown, playing, result */
 var games=[null,null], bots=[null,null], match=null, lastKind='';
 var ready=[false,false], conn=[false,false], wins=[0,0], forfeit=[0,0];
 var rules='ko';                    /* 'ko' or 'classic', picked on either phone */
+var mode='versus';                 /* 'versus' or 'coop' (one shared wide board), picked on either phone */
+var co=null, coPanel=null, coopBest=0;
+try{if(localStorage.getItem('bd-mode')==='coop')mode='coop'; coopBest=+localStorage.getItem('bd-coop-best')||0;}catch(e){}
 var koMin=3;                       /* KO match length in minutes, 0 = no limit */
 try{if(localStorage.getItem('bd-rules')==='classic')rules='classic';}catch(e){}
 try{var km=+localStorage.getItem('bd-komin');if(localStorage.getItem('bd-komin')!==null&&KO_MINUTES.indexOf(km)>=0)koMin=km;}catch(e){}
@@ -192,7 +206,7 @@ function setNet(on){
 }
 function bcState(){
   if(!ws||ws.readyState!==1)return;
-  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,kos:match&&match.ko?match.kos.slice():null}}));
+  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,mode:mode,coop:match&&match.coop?{lines:co?co.lines:0,best:coopBest}:null,kos:match&&match.ko?match.kos.slice():null}}));
 }
 function connect(){
   clearTimeout(wsTimer);
@@ -225,23 +239,31 @@ function onSeats(list){
         (function(seat){
           forfeit[seat]=setTimeout(function(){
             forfeit[seat]=0;
-            if((phase==='countdown'||phase==='playing')&&!conn[seat]&&games[seat]){if(match.solo)games[seat].die();else finish(1-seat);}
+            if((phase==='countdown'||phase==='playing')&&!conn[seat]){if(match.coop)finish(null);else if(!games[seat])return;else if(match.solo)games[seat].die();else finish(1-seat);}
           },FORFEIT_MS);
         })(i);
       }else if(conn[i]&&forfeit[i]){clearTimeout(forfeit[i]);forfeit[i]=0;}
     }
     if(panels[i])panels[i].el.className='panel'+(inMatch&&!conn[i]?' away':'');
+    if(coPanel)coPanel.away[i].hidden=!(inMatch&&!conn[i]);
   }
   renderLobby(); bcState();
 }
 function onPad(seat,m){
   if(seat!==0&&seat!==1||!m)return;
   if(m.t==='in'){
-    if(phase==='playing'&&games[seat]&&!games[seat].over&&!bots[seat])games[seat].apply(m.k);
+    if(phase!=='playing')return;
+    if(match.coop){if(co)co.apply(seat,m.k);}
+    else if(games[seat]&&!games[seat].over&&!bots[seat])games[seat].apply(m.k);
   }else if(m.t==='rules'){
     if(phase!=='lobby'&&phase!=='result')return;
     rules=m.v?'ko':'classic';
     try{localStorage.setItem('bd-rules',rules);}catch(e){}
+    renderLobby(); bcState();
+  }else if(m.t==='mode'){
+    if(phase!=='lobby'&&phase!=='result')return;
+    mode=m.v?'coop':'versus';
+    try{localStorage.setItem('bd-mode',mode);}catch(e){}
     renderLobby(); bcState();
   }else if(m.t==='kotime'){
     if(phase!=='lobby'&&phase!=='result'||KO_MINUTES.indexOf(m.min)<0)return;
@@ -256,7 +278,7 @@ function onPad(seat,m){
     ready[seat]=!!m.v;
     renderLobby(); bcState();
     var want=[]; for(var i=0;i<2;i++)if(conn[i])want.push(i);
-    if(want.length===2&&ready[0]&&ready[1])startMatch(want);
+    if(want.length===2&&ready[0]&&ready[1]){if(mode==='coop')startCoop();else startMatch(want);}
   }
 }
 
@@ -268,7 +290,9 @@ function renderLobby(){
     el.className='seat'+(conn[i]?' conn':'')+(conn[i]&&ready[i]?' ready':'');
     el.querySelector('.st').textContent=!conn[i]?'Waiting for a phone':(ready[i]?'Ready':'Connected');
   }
-  $('#rules').textContent=rules==='ko'?
+  $('#rules').textContent=mode==='coop'?
+    'Mode: Co-op. Both players build on one wide board and clear lines together. The run ends when the stack reaches the top.'+(coopBest?' Best so far: '+coopBest+' lines.':''):
+    rules==='ko'?
     'Rules: KO. Topping out clears your board and gives the other player a KO. First to '+KO_TO_WIN+' KOs wins'+(koMin?', or the most KOs after '+koMin+(koMin===1?' minute.':' minutes.'):'. No time limit.'):
     'Rules: Classic. Top out once and you lose.';
 }
@@ -276,13 +300,14 @@ function seatName(i){return match&&match.cpu===i?'Computer · '+CPU_NAME[match.l
 function seatTag(i){return match&&match.cpu===i?'CPU':'P'+(i+1);}
 function showTally(){
   $('#tally').innerHTML='<span style="color:'+SEATCOL[0]+'">'+seatTag(0)+'</span> <b>'+wins[0]+'</b> &nbsp;&ndash;&nbsp; <b>'+wins[1]+'</b> <span style="color:'+SEATCOL[1]+'">'+seatTag(1)+'</span>';
-  $('#tally').hidden=!!(match&&match.solo);
+  $('#tally').hidden=!!(match&&(match.solo||match.coop));
 }
 function startMatch(seatList,cpu){
   var seed=Math.floor(Math.random()*2147483647);
   var solo=seatList.length===1;
   match={seats:seatList.slice(),solo:solo,t0:performance.now()+COUNTDOWN,winner:null,cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&rules==='ko',kos:[0,0]};
   match.tEnd=koMin?match.t0+koMin*60000:Infinity;
+  co=null; coPanel=null;
   var kind=solo?lastKind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between friends and the computer */
   if(kind!==lastKind){wins=[0,0];lastKind=kind;}
   games=[null,null]; bots=[null,null];
@@ -319,6 +344,34 @@ function startMatch(seatList,cpu){
   showTally(); layout();
   bcState();
 }
+function buildCoopPanel(){
+  var el=document.createElement('section');
+  el.className='panel coop';
+  function rail(i){
+    return '<div class="side" style="--pc:'+SEATCOL[i]+'"><div class="who"><i></i><span>Player '+(i+1)+'</span></div><em class="away" hidden>Reconnecting</em>'+
+      '<div class="blk"><div class="lbl">Hold</div><canvas class="hld'+i+'"></canvas></div><div class="blk"><div class="lbl">Next</div><canvas class="nxt'+i+'"></canvas></div></div>';
+  }
+  el.innerHTML='<div class="coopbar"><span>Co-op</span><span>Lines<b class="ln">0</b></span><span>Level<b class="lv">1</b></span><span>Best<b class="bs">'+coopBest+'</b></span></div>'+
+    '<div class="row">'+rail(0)+'<canvas class="board"></canvas>'+rail(1)+'</div>';
+  return {el:el,board:el.querySelector('canvas.board'),hld:[el.querySelector('.hld0'),el.querySelector('.hld1')],nxt:[el.querySelector('.nxt0'),el.querySelector('.nxt1')],
+    away:el.querySelectorAll('em.away'),ln:el.querySelector('.ln'),lv:el.querySelector('.lv'),shown:''};
+}
+function startCoop(){
+  var seed=Math.floor(Math.random()*2147483647);
+  match={seats:[0,1],solo:false,coop:true,t0:performance.now()+COUNTDOWN,winner:null,cpu:null,level:null,ko:false,kos:[0,0],tEnd:Infinity};
+  games=[null,null]; bots=[null,null]; panels=[null,null];
+  co=new CoopGame(seed);
+  co.sfx=function(i,n,a){if(TV_SFX[n])SFX.play(n,i===0?-0.4:0.4,a);};
+  co.onOver=function(){if(phase==='playing'||phase==='countdown')finish(null);};
+  coPanel=buildCoopPanel();
+  var field=$('#field'); field.innerHTML=''; field.appendChild(coPanel.el);
+  for(var i=0;i<2;i++){clearTimeout(forfeit[i]);forfeit[i]=0;}
+  ready=[false,false];
+  phase='countdown';
+  $('#lobby').hidden=true; $('#match').hidden=false; $('#result').hidden=true; $('#clock').hidden=true;
+  showTally(); layout();
+  bcState();
+}
 function fmtClock(ms){var t=Math.max(0,Math.ceil(ms/1000));return Math.floor(t/60)+':'+('0'+t%60).slice(-2);}
 function timeUp(){
   var k=match.kos, w=k[0]>k[1]?0:k[1]>k[0]?1:-1;
@@ -331,10 +384,17 @@ function finish(winner){
   phase='result';
   match.winner=winner;
   games.forEach(function(g){if(g)g.over=true;});
+  if(co)co.die();
   if(winner!==null&&winner>=0)wins[winner]++;
   showTally();
   var t=$('#resTitle');
-  if(winner===null){
+  if(match.coop){
+    var n=co?co.lines:0, best=n>coopBest;
+    if(best){coopBest=n;try{localStorage.setItem('bd-coop-best',String(n));}catch(e){}}
+    t.textContent=best&&n>0?'New best':'Game over'; t.style.color='';
+    $('#resTally').textContent=n+(n===1?' line':' lines')+' together';
+    $('#resHint').textContent=(best?'':'Best: '+coopBest+' lines. ')+'Tap Play again on both phones to go again.';
+  }else if(winner===null){
     t.textContent='Game over'; t.style.color='';
     $('#resTally').textContent=games[match.seats[0]].lines+' lines';
     $('#resHint').textContent='Tap Play again on your phone to go again.';
@@ -348,7 +408,7 @@ function finish(winner){
     $('#resHint').textContent=match.cpu!=null?'Tap Rematch on your phone to go again.':'Tap Rematch on your phones to go again.';
     if(match.ko)$('#resHint').textContent=(match.timeUp?'Time ran out. ':'')+'KOs '+match.kos[0]+' to '+match.kos[1]+'. '+$('#resHint').textContent;
   }
-  SFX.play(winner===null||winner<0?'lose':'win');
+  SFX.play(match.coop?(co&&co.lines>0&&co.lines>=coopBest?'win':'lose'):(winner===null||winner<0?'lose':'win'));
   $('#count').hidden=true; $('#result').hidden=false;
   ready=[false,false];
   renderLobby(); bcState();
@@ -365,6 +425,16 @@ function frame(ts){
         var sec=Math.ceil(left/1000);
         if(match.lastBeep!==sec){match.lastBeep=sec;SFX.play('tick');}
         cnt.hidden=false;cnt.textContent=sec;
+      }
+    }
+    if(phase==='playing'&&co)co.tick(ts,match.t0);
+    if(coPanel&&co){
+      drawCoop(coPanel.board,co,cs);
+      for(var q=0;q<2;q++){drawNext(coPanel.nxt[q],co.p[q],coPanel.ns,2);drawHold(coPanel.hld[q],co.p[q],coPanel.ns);}
+      var ck2=co.lines+'|'+co.level;
+      if(coPanel.shown!==ck2){coPanel.shown=ck2;coPanel.ln.textContent=co.lines;coPanel.lv.textContent=co.level;bcState();}
+      if((co.p[0].thud&&performance.now()-co.p[0].thud<10)||(co.p[1].thud&&performance.now()-co.p[1].thud<10)){
+        coPanel.board.classList.remove('thud'); void coPanel.board.offsetWidth; coPanel.board.classList.add('thud'); co.p[0].thud=co.p[1].thud=0;
       }
     }
     if(phase==='playing'){
@@ -396,7 +466,7 @@ fetch('/info').then(function(r){return r.json();}).then(function(d){$('#url').te
 renderLobby();
 connect();
 requestAnimationFrame(frame);
-window.BD={get games(){return games;},get phase(){return phase;},get match(){return match;},get wins(){return wins;}};
+window.BD={get co(){return co;},get games(){return games;},get phase(){return phase;},get match(){return match;},get wins(){return wins;}};
 })();
 </script>
 </body>

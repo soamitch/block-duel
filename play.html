@@ -60,6 +60,10 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 .rail .lbl{font:600 11px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim); margin-top:4px}
 .rail .st{display:flex; justify-content:space-between; align-items:baseline; margin-top:4px}
 .rail b{font:600 16px var(--font-mono); color:var(--fg)}
+#local.coop{flex-direction:column; align-items:center; gap:8px}
+#local.coop .rail{flex-direction:row; width:auto; align-items:center; gap:10px; order:-1}
+#local.coop .rail .st{margin-top:0; gap:6px}
+#local.coop #oppBox{display:none}
 #cdNum{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 120px var(--font-display); color:var(--accent); text-shadow:0 2px 0 var(--bg)}
 .hud{font:600 15px var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:.06em; display:flex; gap:14px; align-items:center}
 .hud .low{color:var(--danger)}
@@ -84,6 +88,10 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
       <div class="opt" id="screenRow">
         <span class="lbl">Screen</span>
         <button class="btn small" data-screen="tv" aria-pressed="false">TV</button><button class="btn small" data-screen="phone" aria-pressed="false">Phones</button>
+      </div>
+      <div class="opt" id="modeRow">
+        <span class="lbl">Mode</span>
+        <button class="btn small" data-mode="versus" aria-pressed="false">Versus</button><button class="btn small" data-mode="coop" aria-pressed="false">Co-op</button>
       </div>
       <div class="opt" id="rulesRow">
         <span class="lbl">Rules</span>
@@ -120,7 +128,7 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
           <span class="lbl">Next</span><canvas id="myNext"></canvas>
           <div id="oppBox"><span class="lbl" id="oppName"></span><canvas id="oppBoard"></canvas></div>
           <div class="st"><span class="lbl">Lines</span><b id="myLines">0</b></div>
-          <div class="st"><span class="lbl">Sent</span><b id="mySent">0</b></div>
+          <div class="st"><span class="lbl" id="statB">Sent</span><b id="mySent">0</b></div>
         </div>
         <div id="cdNum" hidden></div>
       </div>
@@ -204,6 +212,8 @@ var KEY_SFX={L:'move',R:'move',U:'rotate',Z:'rotate',H:'hard',C:'hold'};
 function key(k){
   vibe(BUZZ[k]||8);
   if(!phoneMode()){sendMsg({t:'in',k:k});if(KEY_SFX[k]&&S.phase==='playing')SFX.play(KEY_SFX[k],0);return;}
+  if(G&&G.coop){relay({k:'in',key:k});if(KEY_SFX[k]&&performance.now()>=G.t0)SFX.play(KEY_SFX[k],0);return;}
+  if(R.match&&R.match.coop){if(R.co&&R.phase==='playing')R.co.apply(seat,k);return;}
   var g=myGame(); if(g&&!g.over)g.apply(k);
 }
 function hint(txt){if(!phoneMode())flash(txt);}   /* the move names only show on the plain swipe pad, not over a board */
@@ -236,7 +246,15 @@ function render(){
   else if(S.phase==='countdown'||S.phase==='playing'){playing=true;}
   else if(S.phase==='result'&&!(S.cpu&&S.cpu.seat===seat)&&!(S.seats&&S.seats.indexOf(seat)<0)){
     showReady=true; showSolo=false;
-    if(S.solo){title='Game over';sub='Nice run.';btn='Play again';}
+    if(S.coop){
+      var cl=S.coop.lines|0;
+      title=cl>0&&cl>=S.coop.best?'New best':'Game over';
+      sub='You cleared '+cl+(cl===1?' line':' lines')+' together. Best: '+(S.coop.best|0)+'.';
+      btn=S.ready[seat]?'Not ready':'Play again';
+      if(S.ready[seat])sub+=' Waiting for player '+(other+1)+'.';
+      if(!S.conn[other]){sub+=' Player '+(other+1)+' has left.';showSolo=true;}
+    }
+    else if(S.solo){title='Game over';sub='Nice run.';btn='Play again';}
     else if(S.cpu&&S.cpu.seat!==seat){
       title=S.winner===seat?'You won':(S.winner===-1?'Draw':'You lost');
       sub='Wins: you '+S.wins[seat]+', computer '+S.wins[S.cpu.seat]+'.';
@@ -264,13 +282,15 @@ function render(){
   $('#readyBtn').textContent=btn;
   show($('#soloBtn'),showSolo);
   show($('#cpuRow'),showSolo);
-  var showRules=showReady&&!(S.phase==='result'&&S.solo);
-  show($('#rulesRow'),showRules); show($('#rulesNote'),showRules);
+  var showRules=showReady&&!(S.phase==='result'&&S.solo), coop=S.mode==='coop';
+  show($('#modeRow'),showRules);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-mode')===(coop?'coop':'versus')));});
+  show($('#rulesRow'),showRules&&!coop); show($('#rulesNote'),showRules);
   Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-rules')===(S.rules||'ko')));});
   var ko=S.rules!=='classic', km=S.koMin==null?3:S.koMin;
-  show($('#timeRow'),showRules&&ko);
+  show($('#timeRow'),showRules&&ko&&!coop);
   Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
-  $('#rulesNote').textContent=!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
+  $('#rulesNote').textContent=coop?'Build one wide board together and clear lines as a team. Needs both phones; the computer and practice buttons still play versus.':!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
   show($('#swipeRow'),showReady); show($('#soundRow'),showReady); soundNote(showReady);
   Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-sound')==='1')===SFX.isOn()));});
   show($('#screenRow'),showReady&&room.tv);
@@ -294,6 +314,9 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function
 });
 Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
   b.addEventListener('click',function(){act({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
+});
+Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'),function(b){
+  b.addEventListener('click',function(){act({t:'mode',v:b.getAttribute('data-mode')==='coop'});});
 });
 Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){
   b.addEventListener('click',function(){act({t:'kotime',min:+b.getAttribute('data-min')});});
@@ -344,15 +367,18 @@ function act(o){
   if(!phoneMode()){sendMsg(o);return;}
   if(guest())relay({k:'pad',o:o}); else refPad(seat,o);
 }
-function viewGame(){return G?G.game:(R.match&&R.games[seat])||null;}
+function viewGame(){return G?(G.game||null):(R.match&&R.games[seat])||null;}
 function myGame(){
+  if(G&&G.coop)return null;
   if(G)return performance.now()>=G.t0?G.game:null;
   return R.match&&R.phase==='playing'?R.games[seat]:null;
 }
 
 /* the scorekeeper: the same flow as the TV page, for this phone's own matches and, on player 1's phone, two-phone matches */
-var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
+var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,mode:'versus',co:null,coopBest:0,coEv:[],match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
 try{
+  if(localStorage.getItem('bd-mode')==='coop')R.mode='coop';
+  R.coopBest=+localStorage.getItem('bd-coop-best')||0;
   if(localStorage.getItem('bd-rules')==='classic')R.rules='classic';
   var km=localStorage.getItem('bd-komin'); if(km!==null&&KO_MINUTES.indexOf(+km)>=0)R.koMin=+km;
 }catch(e){}
@@ -361,6 +387,7 @@ function refState(){
   var m=R.match;
   return {phase:R.phase,ready:R.ready.slice(),conn:refConn(),wins:R.wins.slice(),winner:m?m.winner:null,solo:!!(m&&m.solo),
     cpu:m&&m.cpu!=null?{seat:m.cpu,level:m.level}:null,rules:R.rules,koMin:R.koMin,kos:m&&m.ko?m.kos.slice():null,
+    mode:R.mode,coop:m&&m.coop?{lines:R.co?R.co.lines:0,best:R.coopBest}:null,
     seats:m?m.seats.filter(function(i){return i!==m.cpu;}):null};
 }
 function push(){
@@ -373,6 +400,7 @@ function push(){
 function refPad(from,o){
   if(R.phase!=='lobby'&&R.phase!=='result')return;
   if(o.t==='rules'){R.rules=o.v?'ko':'classic';try{localStorage.setItem('bd-rules',R.rules);}catch(e){} push();}
+  else if(o.t==='mode'){R.mode=o.v?'coop':'versus';try{localStorage.setItem('bd-mode',R.mode);}catch(e){} push();}
   else if(o.t==='kotime'){
     if(KO_MINUTES.indexOf(o.min)<0)return;
     R.koMin=o.min; try{localStorage.setItem('bd-komin',String(R.koMin));}catch(e){} push();
@@ -381,7 +409,7 @@ function refPad(from,o){
     if(from===seat&&o.solo&&!c[1-seat]){refStart([seat]);return;}
     if(from===seat&&o.cpu&&CPU[o.cpu]&&!c[1-seat]){refStart([0,1],{seat:1-seat,level:o.cpu});return;}
     R.ready[from]=!!o.v; push();
-    if(c[0]&&c[1]&&R.ready[0]&&R.ready[1])refStart([0,1]);
+    if(c[0]&&c[1]&&R.ready[0]&&R.ready[1]){if(R.mode==='coop')refStartCoop();else refStart([0,1]);}
   }
 }
 function refStart(list,cpu){
@@ -391,7 +419,7 @@ function refStart(list,cpu){
   m.tEnd=m.ko&&R.koMin?m.t0+R.koMin*60000:Infinity;
   var kind=solo?R.kind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between a friend and the computer */
   if(kind!==R.kind){R.wins=[0,0];R.kind=kind;}
-  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null;
+  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null; R.co=null;
   list.forEach(function(i){
     if(i===remote)return;
     var g=R.games[i]=new Game(m.seed);
@@ -403,6 +431,29 @@ function refStart(list,cpu){
   R.ready=[false,false]; R.phase='countdown';
   clearTimeout(R.forfeit); R.forfeit=0;
   push();
+}
+/* phones-only co-op runs on player 1's phone; player 2's inputs come in as 'in' messages and the board goes back as 'cosnap' */
+function refStartCoop(){
+  var now=performance.now();
+  var m=R.match={seats:[0,1],solo:false,coop:true,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
+    cpu:null,level:null,ko:false,kos:[0,0],remote:1-seat,lastBeep:0,tEnd:Infinity};
+  R.games=[null,null]; R.bots=[null,null]; opp=null; G=null; R.coEv=[];
+  var co=R.co=new CoopGame(m.seed);
+  co.sfx=function(i,n,a){
+    if(i===seat||n==='clear')SFX.play(n,0,a);          /* the other player's moves sound on their own phone */
+    if(n==='clear'||n==='lock')R.coEv.push(n);
+  };
+  co.onOver=function(){if(R.phase==='playing'||R.phase==='countdown')refFinish(null);};
+  R.ready=[false,false]; R.phase='countdown';
+  clearTimeout(R.forfeit); R.forfeit=0;
+  push(); layoutLocal();
+}
+function coSnap(){
+  var co=R.co, o=co.p[1-seat], b='', r;
+  for(r=0;r<ROWS;r++)b+=co.board[r].join('');
+  function cur(g){return g.cur&&!co.over?{t:g.cur.t,m:g.cur.m,x:g.cur.x,y:g.cur.y}:null;}
+  var ev=R.coEv; R.coEv=[];
+  return {k:'cosnap',b:b,c:[cur(co.p[0]),cur(co.p[1])],q:o.queue.slice(0,2),h:o.held,ch:o.canHold,ln:co.lines,lv:co.level,ev:ev};
 }
 function refSend(from,n){
   var m=R.match, to=1-from; if(!m||m.solo)return;
@@ -421,10 +472,14 @@ function refTopOut(i){
 }
 function refFinish(w){
   if(R.phase==='result')return;
-  R.phase='result'; R.match.winner=w;
+  R.phase='result'; R.match.winner=R.match.coop?null:w;
+  if(R.match.coop){
+    w=null;
+    if(R.co){R.co.die(); if(R.co.lines>R.coopBest){R.coopBest=R.co.lines;try{localStorage.setItem('bd-coop-best',String(R.coopBest));}catch(e){}}}
+  }
   R.games.forEach(function(g){if(g)g.over=true;});
   if(w!==null&&w>=0)R.wins[w]++;
-  SFX.play(w===seat?'win':'lose');
+  SFX.play(R.match.coop?(R.co&&R.co.lines>0&&R.co.lines>=R.coopBest?'win':'lose'):(w===seat?'win':'lose'));
   R.ready=[false,false]; clearTimeout(R.forfeit); R.forfeit=0;
   push();
 }
@@ -444,6 +499,7 @@ function refTick(ts){
     else{var sec=Math.ceil(left/1000);if(m.lastBeep!==sec){m.lastBeep=sec;SFX.play('tick');}}
   }
   if(R.phase!=='playing')return;
+  if(R.co){var before=R.co.lines; R.co.tick(ts,m.t0); if(R.co.lines!==before&&R.phase==='playing')push(); return;}
   for(var i=0;i<2;i++){
     var g=R.games[i]; if(!g)continue;
     if(g.over&&g.koUntil&&ts>=g.koUntil)g.revive();
@@ -455,6 +511,12 @@ function refTick(ts){
 /* player 2's side of a two-phone match: play the board locally, follow player 1's state */
 function guestSync(o){
   var s=o.s, mine=!!(s.seats&&s.seats.indexOf(seat)>=0&&!s.solo&&!s.cpu), live=s.phase==='countdown'||s.phase==='playing';
+  if(mine&&live&&s.coop){
+    var t=performance.now();
+    if(!G||G.seed!==o.seed){G={coop:true,seed:o.seed,t0:t+(+o.cd||0),tEnd:Infinity,lastBeep:0,went:false,snap:null}; layoutLocal();}
+    if(s.phase==='countdown')G.t0=t+(+o.cd||0);
+    return;
+  }
   if(mine&&live){
     var now=performance.now();
     if(!G||G.seed!==o.seed){
@@ -468,7 +530,7 @@ function guestSync(o){
     if(s.phase==='countdown')G.t0=now+(+o.cd||0);
     G.tEnd=o.tl>=0?now+o.tl:Infinity;
   }else if(G&&!live){
-    G.game.over=true; G=null;
+    if(G.game)G.game.over=true; G=null;
     SFX.play(s.winner===seat?'win':'lose');
   }
 }
@@ -476,6 +538,7 @@ function guestTick(ts){
   var g=G.game, left=G.t0-ts;
   if(left>0){var sec=Math.ceil(left/1000);if(G.lastBeep!==sec){G.lastBeep=sec;SFX.play('tick');}return;}
   if(!G.went){G.went=true;SFX.play('go');}
+  if(G.coop)return;
   if(g.over&&g.koUntil&&ts>=g.koUntil)g.revive();
   if(!g.over)g.tick(ts,G.t0);
 }
@@ -488,6 +551,11 @@ function onPeer(from,o){
   else if(o.k==='pad'&&seat===0&&o.o&&typeof o.o==='object')refPad(from,o.o);
   else if(o.k==='atk'){var g=myGame()||viewGame(); if(g&&!g.over)g.receive(Math.max(0,Math.min(GARBAGE_CAP,o.n|0)));}
   else if(o.k==='ko'&&seat===0&&R.match&&R.match.remote===from)refTopOut(from);
+  else if(o.k==='in'&&seat===0&&R.match&&R.match.coop&&R.co&&R.phase==='playing'&&typeof o.key==='string')R.co.apply(from,o.key);
+  else if(o.k==='cosnap'&&G&&G.coop&&typeof o.b==='string'&&o.b.length===ROWS*COOP_COLS){
+    G.snap=o;
+    (Array.isArray(o.ev)?o.ev:[]).forEach(function(n){if(n==='clear')SFX.play('clear',0,1);});
+  }
   else if(o.k==='snap'){opp=o; if(seat===0&&R.match&&R.match.remote===from)R.remoteSent=o.sent|0;}
 }
 function onRoom(m){
@@ -512,8 +580,17 @@ function onRoom(m){
 
 /* the board view */
 var cvMy=$('#myBoard'), cvHold=$('#myHold'), cvNext=$('#myNext'), cvOpp=$('#oppBoard'), lcs=20, lns=11, ocs=8, hudTxt='';
+function coopShown(){return !!((G&&G.coop)||(R.match&&R.match.coop&&R.co));}
 function layoutLocal(){
   var r=surf.getBoundingClientRect(); if(!r.width)return;
+  $('#local').classList.toggle('coop',coopShown());
+  if(coopShown()){                                  /* wide board below a strip with hold, next and the line count */
+    lns=Math.max(8,Math.min(14,Math.floor(r.width/28)));
+    lcs=Math.max(8,Math.floor(Math.min((r.height-16-lns*3-18)/ROWS,(r.width-16)/COOP_COLS)));
+    setCanvas(cvMy,COOP_COLS*lcs,ROWS*lcs);
+    setCanvas(cvHold,lns*5,lns*3); setCanvas(cvNext,lns*5,lns*3);
+    return;
+  }
   var railW=84, W=r.width-16-railW-10, H=r.height-16;
   lcs=Math.max(10,Math.floor(Math.min(H/ROWS,W/COLS)));
   setCanvas(cvMy,COLS*lcs,ROWS*lcs);
@@ -532,7 +609,34 @@ function snapView(o){
   for(r=0;r<ROWS;r++){var row=[];for(c=0;c<COLS;c++)row.push(Math.min(8,+o.b.charAt(r*COLS+c)||0));board.push(row);}
   return {board:board,cur:null,over:!!o.ko,koUntil:o.ko?1:0,pending:Math.max(0,o.p|0),armed:function(){return Math.max(0,o.a|0);},fx:null};
 }
+/* what player 2 draws in phones-only co-op: the board as player 1's phone last sent it */
+function coopFromSnap(o){
+  var board=[], r, c;
+  for(r=0;r<ROWS;r++){var row=[];for(c=0;c<COOP_COLS;c++)row.push(Math.min(8,+o.b.charAt(r*COOP_COLS+c)||0));board.push(row);}
+  function lane(cur){
+    var ok=cur&&typeof cur.t==='string'&&SHAPES[cur.t]&&Array.isArray(cur.m);
+    return {cur:ok?cur:null,fx:null,collide:function(m,x,y){return collideOn(board,m,x,y);}};
+  }
+  var cs2=Array.isArray(o.c)?o.c:[];
+  return {board:board,over:false,p:[lane(cs2[0]),lane(cs2[1])]};
+}
+function drawCoopLocal(ts){
+  var view, mine, lines, level, t0;
+  if(G&&G.coop){
+    t0=G.t0;
+    if(!G.snap){drawEmptyBoard(cvMy);view=null;}
+    else{view=coopFromSnap(G.snap); var q=Array.isArray(G.snap.q)?G.snap.q.filter(function(t){return SHAPES[t];}):[];
+      mine={queue:q,held:SHAPES[G.snap.h]?G.snap.h:null,canHold:!!G.snap.ch}; lines=G.snap.ln|0; level=G.snap.lv|0;}
+  }else{view=R.co; mine=R.co.p[seat]; lines=R.co.lines; level=R.co.level; t0=R.match.t0;}
+  if(view){drawCoop(cvMy,view,lcs); drawHold(cvHold,mine,lns); drawNext(cvNext,mine,lns,1);}
+  $('#myLines').textContent=lines||0; $('#statB').textContent='Level'; $('#mySent').textContent=level||1;
+  var left=t0-ts, cd=$('#cdNum'); cd.hidden=left<=0; if(left>0)cd.textContent=Math.ceil(left/1000);
+  var txt='Co-op';
+  if(txt!==hudTxt){hudTxt=txt;$('#hud').innerHTML='<span>Co-op</span>';}
+}
 function drawLocal(ts){
+  if(coopShown()){drawCoopLocal(ts);return;}
+  $('#statB').textContent='Sent';
   var g=viewGame(); if(!g)return;
   drawBoard(cvMy,g,lcs); if(g.over&&g.koUntil)drawKO(cvMy,lcs);
   drawHold(cvHold,g,lns); drawNext(cvNext,g,lns,2);
@@ -560,8 +664,12 @@ function loop(ts){
     if(R.match)refTick(ts);
     if(G)guestTick(ts);
     if(!$('#local').hidden)drawLocal(ts);
-    var mine=G?G.game:(R.match&&R.match.remote!=null&&R.phase==='playing'?R.games[seat]:null);
-    if(mine&&ts-snapAt>=100){snapAt=ts;relay(snapOf(mine));}
+    if(R.match&&R.match.coop&&R.co&&seat===0&&peerOn()&&(R.phase==='playing'||R.phase==='countdown')){
+      if(ts-snapAt>=33){snapAt=ts;relay(coSnap());}
+    }else{
+      var mine=G?G.game:(R.match&&R.match.remote!=null&&R.phase==='playing'?R.games[seat]:null);
+      if(mine&&ts-snapAt>=100){snapAt=ts;relay(snapOf(mine));}
+    }
   }
   requestAnimationFrame(loop);
 }

@@ -47,6 +47,12 @@ One phone alone can tap "Play on my own" for a practice run, or play the compute
   runs out the most KOs wins, then the most garbage sent.
 - **Classic**: top out once and you lose.
 
+**Co-op**: pick Mode: Co-op in the phone lobby and both tap Ready. You share one wide
+board (16 columns), each dropping your own pieces (outlined in your colour) with your own
+hold and next. Falling pieces pass through each other; they only meet once placed. Clear lines together; speed rises over time, and the run ends when the
+stack reaches the top. The best run is remembered. Works on the TV and on phones only
+(there, player 1's phone runs the board and player 2 sees it a moment later over Wi-Fi).
+
 ## Playing on phones only
 
 With no TV page open, each phone shows its own board and you play on the phone
