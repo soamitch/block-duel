@@ -3,6 +3,8 @@
 Two players, one TV, two phones. The TV shows both boards. Each phone is a
 controller driven by swipe gestures. Everything stays on your home network.
 
+No TV handy? The phones can also play on their own screens (see "Playing on phones only").
+
 ## Run it
 
 Needs Node 16 or newer (https://nodejs.org, the LTS version). There is nothing else to install.
@@ -34,9 +36,24 @@ Both phones must be on the same Wi-Fi as the computer running the server.
 1. Open the TV address. You see the lobby with a QR code.
 2. Each player scans the code. Player 1 is cyan, Player 2 is amber.
 3. Tap Ready on both phones. A 3 second countdown starts the match.
-4. First stack to reach the top loses. The TV keeps a win tally between rematches.
+4. The TV keeps a win tally between rematches.
 
-One phone alone can tap "Play on my own" for a practice run.
+One phone alone can tap "Play on my own" for a practice run, or play the computer
+(Easy, Normal or Hard).
+
+**Rules** (either phone can change them in the lobby):
+- **KO** (default): topping out clears your board and gives the other player a KO.
+  First to 3 KOs wins. Pick a time limit of 2, 3 or 5 minutes, or none; when time
+  runs out the most KOs wins, then the most garbage sent.
+- **Classic**: top out once and you lose.
+
+## Playing on phones only
+
+With no TV page open, each phone shows its own board and you play on the phone
+itself: practice, against the computer, or against the other phone (each phone shows
+a small view of the other player's board). With a TV page open, use **Screen: TV /
+Phones** in the phone lobby to choose. The server still needs to run on the computer,
+because it hands out the page and passes messages between the phones.
 
 ## Controls on the phone
 
@@ -47,10 +64,14 @@ One phone alone can tap "Play on my own" for a practice run.
 - Flick up to hold the current piece (once per piece).
 - The phone buzzes on each move (Android only: iPhone Safari does not allow web pages to vibrate).
 
+The swipe sensitivity slider in the phone lobby sets how far a drag moves the piece. It is saved on each phone.
+
 ## Sound
 The TV page plays the sound effects. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
+When playing on phones only, each phone plays its own sounds.
 
-Clearing 2, 3 or 4 lines at once sends 1, 2 or 4 garbage rows to the other board.
+Clearing 2, 3 or 4 lines at once sends 1, 1 or 3 garbage rows to the other board.
+Incoming garbage waits 1.5 seconds before it lands, so you can clear lines to cancel it.
 Both players get the same pieces in the same order.
 
 ## If something does not work
@@ -71,13 +92,15 @@ Both players get the same pieces in the same order.
 
 - The page is served over plain HTTP, which is fine on a home network. It means the
   phone's haptic buzz on hard drops may not fire on every phone.
-- The game runs in the TV page. The server only hands out the pages and passes
-  messages between the phones and the TV, so there is no lag from game logic.
-- Reloading the TV page resets the score tally.
+- The game runs in the TV page (or on each phone in phones-only mode). The server only
+  hands out the pages and passes messages, so there is no lag from game logic.
+- Reloading the TV page resets the score tally. In phones-only mode, player 1's phone
+  keeps the tally.
 
 ## Files
 
 - `start.bat`: double-click launcher for Windows.
 - `server.js`: web server, QR code and message relay. No dependencies.
-- `tv.html`: the TV page with the game.
-- `play.html`: the phone controller.
+- `game.js`: the game itself (board, computer player, sounds, drawing), shared by both pages.
+- `tv.html`: the TV page.
+- `play.html`: the phone page: controller, and the game screen in phones-only mode.

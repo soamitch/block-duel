@@ -11,7 +11,7 @@
 :root{
   --bg:#10141a; --panel:#18202a; --line:#2a3544; --fg:#e9edf2; --dim:#8996a8;
   --accent:#f2b134; --accent-ink:#1a1305; --danger:#ea5a5f; --good:#46d695;
-  --p1:#4cc9f0; --p2:#f2b134;
+  --p1:#4cc9f0; --p2:#f2b134; --board:#0b0f14; --gridline:#18202a; --scrim:rgba(10,13,18,.86);
   --font-display:'Big Shoulders Display','Arial Narrow',Impact,sans-serif;
   --font-ui:'Hanken Grotesk',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
   --font-mono:'Spline Sans Mono',ui-monospace,Menlo,Consolas,monospace;
@@ -53,6 +53,16 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 #surface{flex:1; min-height:0; border:1px solid var(--line); border-radius:14px; background:var(--panel); touch-action:none; position:relative; display:flex; align-items:center; justify-content:center; padding:16px; text-align:center}
 #surface.touch{border-color:var(--c,var(--accent))}
 .hint{color:var(--dim); font-size:15px; max-width:26ch; pointer-events:none}
+#surface.local{padding:8px}
+#local{display:flex; gap:10px; align-items:flex-start; justify-content:center; width:100%; position:relative; pointer-events:none}
+#local canvas{display:block; border-radius:6px; background:var(--board); border:1px solid var(--line)}
+.rail{display:flex; flex-direction:column; gap:5px; width:84px; text-align:left}
+.rail .lbl{font:600 11px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--dim); margin-top:4px}
+.rail .st{display:flex; justify-content:space-between; align-items:baseline; margin-top:4px}
+.rail b{font:600 16px var(--font-mono); color:var(--fg)}
+#cdNum{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 120px var(--font-display); color:var(--accent); text-shadow:0 2px 0 var(--bg)}
+.hud{font:600 15px var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:.06em; display:flex; gap:14px; align-items:center}
+.hud .low{color:var(--danger)}
 #flash{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:900 64px var(--font-display); text-transform:uppercase; letter-spacing:.04em; color:var(--c,var(--accent)); opacity:0; pointer-events:none}
 #flash.show{opacity:.9; transition:none}
 #flash.fade{opacity:0; transition:opacity .25s}
@@ -62,6 +72,7 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 <div id="app">
   <header>
     <div class="chip" id="chip"><i></i><span id="chipTxt">Connecting</span></div>
+    <div class="hud" id="hud" hidden></div>
     <div class="net" id="net"><i></i><span id="netTxt">Offline</span></div>
   </header>
   <main>
@@ -70,6 +81,10 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
       <p id="sub"></p>
     </div>
     <div class="actions" id="actions" hidden>
+      <div class="opt" id="screenRow">
+        <span class="lbl">Screen</span>
+        <button class="btn small" data-screen="tv" aria-pressed="false">TV</button><button class="btn small" data-screen="phone" aria-pressed="false">Phones</button>
+      </div>
       <div class="opt" id="rulesRow">
         <span class="lbl">Rules</span>
         <button class="btn small" data-rules="ko" aria-pressed="false">KO</button><button class="btn small" data-rules="classic" aria-pressed="false">Classic</button>
@@ -93,11 +108,23 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
     </div>
     <div id="surface" hidden>
       <div class="hint" id="surfHint">Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.</div>
+      <div id="local" hidden>
+        <canvas id="myBoard"></canvas>
+        <div class="rail">
+          <span class="lbl">Hold</span><canvas id="myHold"></canvas>
+          <span class="lbl">Next</span><canvas id="myNext"></canvas>
+          <div id="oppBox"><span class="lbl" id="oppName"></span><canvas id="oppBoard"></canvas></div>
+          <div class="st"><span class="lbl">Lines</span><b id="myLines">0</b></div>
+          <div class="st"><span class="lbl">Sent</span><b id="mySent">0</b></div>
+        </div>
+        <div id="cdNum" hidden></div>
+      </div>
       <div id="flash"></div>
     </div>
   </main>
 </div>
 
+<script src="/game.js"></script>
 <script>
 (function(){
 'use strict';
@@ -105,6 +132,7 @@ function $(s){return document.querySelector(s);}
 var SEATCOL=['var(--p1)','var(--p2)'];
 var ws=null, seat=-1, retry=0, noRetry=false, alive=false;
 var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false,cpu:null,rules:'ko',koMin:3,kos:null};
+var lastTv=S;                      /* latest state from the TV page */
 
 /* a stable id so a refresh keeps the same seat */
 var myId='';
@@ -147,11 +175,14 @@ function connect(){
   ws.onmessage=function(e){
     var m; try{m=JSON.parse(e.data);}catch(x){return;}
     if(m.t==='seat'){seat=m.seat;render();}
-    else if(m.t==='tv'&&m.m){onKos(S.kos,m.m.kos);S=m.m;render();}
+    else if(m.t==='tv'&&m.m){lastTv=m.m;render();}
+    else if(m.t==='room')onRoom(m);
+    else if(m.t==='p'&&m.m)onPeer(m.from,m.m);
     else if(m.t==='full'){noRetry=true;seat=-2;render();}
   };
   ws.onclose=function(ev){
     alive=false;setNet(false);
+    room.seats=[null,null]; G=null; hostS=null;     /* a local practice or computer game keeps running offline */
     if(ev&&ev.code===4001){noRetry=true;seat=-3;}
     render();
     if(!noRetry)retry=setTimeout(connect,1000);
@@ -160,7 +191,12 @@ function connect(){
 }
 function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
 var BUZZ={L:8,R:8,D:5,U:12,C:[10,40,10],H:[28,30,16]};
-function key(k){sendMsg({t:'in',k:k});vibe(BUZZ[k]||8);}
+function key(k){
+  vibe(BUZZ[k]||8);
+  if(!phoneMode()){sendMsg({t:'in',k:k});return;}
+  var g=myGame(); if(g&&!g.over)g.apply(k);
+}
+function hint(txt){if(!phoneMode())flash(txt);}   /* the move names only show on the plain swipe pad, not over a board */
 
 /* a KO shows on the swipe surface; the phone that got knocked out also buzzes */
 function onKos(a,b){
@@ -168,11 +204,15 @@ function onKos(a,b){
   var other=seat===0?1:0;
   if(b[other]>a[other]){flash('KO');vibe([60,40,60]);}
   else if(b[seat]>a[seat])flash('KO');
+  else return;
+  if(phoneMode())SFX.play('ko',0);
 }
 
 /* ---------------------------------------------------------- screens */
 function show(el,on){el.hidden=!on;}
 function render(){
+  S=currentState();
+  onKos(lastKos,S.kos); lastKos=S.kos;
   var c=seat===0||seat===1?SEATCOL[seat]:'var(--dim)';
   document.documentElement.style.setProperty('--c',c);
   $('#chipTxt').textContent=seat===0||seat===1?'Player '+(seat+1):'Block Duel';
@@ -181,9 +221,10 @@ function render(){
   if(seat===-2){title='Both seats are taken';sub='Two phones are already connected. Close this page on one of them, then reload.';}
   else if(seat===-3){title='Seat taken';sub='This seat was taken by another browser on your phone. Close the other tab, then reload this page.';}
   else if(seat<0||!alive){title=alive?'Joining':'Reconnecting';sub='Make sure this phone is on the same Wi-Fi as the TV.';}
+  else if((S.phase==='countdown'||S.phase==='playing')&&S.seats&&S.seats.indexOf(seat)<0){title='Match in progress';sub=S.cpu?'Player '+(other+1)+' is playing the computer. You can join when it ends.':'Player '+(other+1)+' is playing on their own. You can join when it ends.';}
   else if((S.phase==='countdown'||S.phase==='playing')&&S.cpu&&S.cpu.seat===seat){title='Match in progress';sub='Player '+(other+1)+' is playing the computer. You can join when it ends.';}
   else if(S.phase==='countdown'||S.phase==='playing'){playing=true;}
-  else if(S.phase==='result'&&!(S.cpu&&S.cpu.seat===seat)){
+  else if(S.phase==='result'&&!(S.cpu&&S.cpu.seat===seat)&&!(S.seats&&S.seats.indexOf(seat)<0)){
     showReady=true; showSolo=false;
     if(S.solo){title='Game over';sub='Nice run.';btn='Play again';}
     else if(S.cpu&&S.cpu.seat!==seat){
@@ -221,21 +262,30 @@ function render(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
   $('#rulesNote').textContent=!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
   show($('#swipeRow'),showReady);
+  show($('#screenRow'),showReady&&room.tv);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-screen')===room.screen));});
+  var wasHidden=$('#local').hidden, local=playing&&phoneMode();
   show($('#surface'),playing);
+  show($('#surfHint'),!local); show($('#local'),local); surf.classList.toggle('local',local);
+  show($('#hud'),local);
+  if(local&&wasHidden)layoutLocal();
   $('#surfHint').textContent=S.phase==='countdown'?'Get ready':'Drag sideways to move. Tap to rotate. Flick down to drop. Flick up to hold.';
 }
 $('#readyBtn').addEventListener('click',function(){
   var now=!!(S.ready&&S.ready[seat]);
-  if(S.phase==='result'&&S.solo){sendMsg({t:'ready',v:true,solo:true});return;}
-  if(S.phase==='result'&&S.cpu&&S.cpu.seat!==seat&&!S.conn[1-seat]){sendMsg({t:'ready',v:true,cpu:S.cpu.level});return;}
-  sendMsg({t:'ready',v:!now});
+  if(S.phase==='result'&&S.solo){act({t:'ready',v:true,solo:true});return;}
+  if(S.phase==='result'&&S.cpu&&S.cpu.seat!==seat&&!S.conn[1-seat]){act({t:'ready',v:true,cpu:S.cpu.level});return;}
+  act({t:'ready',v:!now});
 });
-$('#soloBtn').addEventListener('click',function(){sendMsg({t:'ready',v:true,solo:true});});
+$('#soloBtn').addEventListener('click',function(){act({t:'ready',v:true,solo:true});});
+Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function(b){
+  b.addEventListener('click',function(){sendMsg({t:'screen',v:b.getAttribute('data-screen')});});
+});
 Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
-  b.addEventListener('click',function(){sendMsg({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
+  b.addEventListener('click',function(){act({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
 });
 Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){
-  b.addEventListener('click',function(){sendMsg({t:'kotime',min:+b.getAttribute('data-min')});});
+  b.addEventListener('click',function(){act({t:'kotime',min:+b.getAttribute('data-min')});});
 });
 function showSens(){$('#sens').value=sens;$('#sensTxt').textContent=SENS_NAMES[sens-1];}
 $('#sens').addEventListener('input',function(){
@@ -244,8 +294,252 @@ $('#sens').addEventListener('input',function(){
 });
 showSens();
 Array.prototype.forEach.call(document.querySelectorAll('[data-cpu]'),function(b){
-  b.addEventListener('click',function(){sendMsg({t:'ready',v:true,cpu:b.getAttribute('data-cpu')});});
+  b.addEventListener('click',function(){act({t:'ready',v:true,cpu:b.getAttribute('data-cpu')});});
 });
+
+/* ---------------------------------------------------------- phone mode */
+/* With Screen set to Phones (always the case when no TV page is open) each phone shows and runs its own board. On its own a phone
+   runs practice and computer matches entirely by itself (R below keeps score). In a two-phone match player 1's phone keeps score
+   for both (ready, countdown, KOs, clock, wins) and sends that state to player 2; each phone plays its own board, and the two swap
+   garbage, top-outs and small board snapshots through the server. */
+var room={seats:[null,null],tv:false,screen:'tv'};
+var hostS=null, G=null, opp=null, lastKos=null, snapAt=0;
+function phoneMode(){return room.screen==='phone'||!!G||localLive();}   /* a game in progress on this phone carries on whatever the room switches to */
+function peerOn(){var o=room.seats[seat===0?1:0];return !!(o&&o.connected);}
+function relay(o){sendMsg({t:'p',m:o});}
+function localLive(){return !!(R.match&&(R.phase==='countdown'||R.phase==='playing'));}
+function guest(){return phoneMode()&&seat===1&&peerOn()&&!localLive();}
+function currentState(){
+  if(!phoneMode())return lastTv;
+  if(guest())return hostS||refState();
+  return refState();
+}
+function act(o){
+  if(!phoneMode()){sendMsg(o);return;}
+  if(guest())relay({k:'pad',o:o}); else refPad(seat,o);
+}
+function viewGame(){return G?G.game:(R.match&&R.games[seat])||null;}
+function myGame(){
+  if(G)return performance.now()>=G.t0?G.game:null;
+  return R.match&&R.phase==='playing'?R.games[seat]:null;
+}
+
+/* the scorekeeper: the same flow as the TV page, for this phone's own matches and, on player 1's phone, two-phone matches */
+var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
+try{
+  if(localStorage.getItem('bd-rules')==='classic')R.rules='classic';
+  var km=localStorage.getItem('bd-komin'); if(km!==null&&KO_MINUTES.indexOf(+km)>=0)R.koMin=+km;
+}catch(e){}
+function refConn(){var c=[false,false]; if(seat===0||seat===1){c[seat]=true;c[1-seat]=peerOn();} return c;}
+function refState(){
+  var m=R.match;
+  return {phase:R.phase,ready:R.ready.slice(),conn:refConn(),wins:R.wins.slice(),winner:m?m.winner:null,solo:!!(m&&m.solo),
+    cpu:m&&m.cpu!=null?{seat:m.cpu,level:m.level}:null,rules:R.rules,koMin:R.koMin,kos:m&&m.ko?m.kos.slice():null,
+    seats:m?m.seats.filter(function(i){return i!==m.cpu;}):null};
+}
+function push(){
+  render();
+  if(phoneMode()&&seat===0&&peerOn()){
+    var m=R.match, now=performance.now();
+    relay({k:'state',s:refState(),seed:m?m.seed:0,cd:m?Math.max(0,m.t0-now):0,tl:m&&m.tEnd<Infinity?m.tEnd-now:-1});
+  }
+}
+function refPad(from,o){
+  if(R.phase!=='lobby'&&R.phase!=='result')return;
+  if(o.t==='rules'){R.rules=o.v?'ko':'classic';try{localStorage.setItem('bd-rules',R.rules);}catch(e){} push();}
+  else if(o.t==='kotime'){
+    if(KO_MINUTES.indexOf(o.min)<0)return;
+    R.koMin=o.min; try{localStorage.setItem('bd-komin',String(R.koMin));}catch(e){} push();
+  }else if(o.t==='ready'){
+    var c=refConn();
+    if(from===seat&&o.solo&&!c[1-seat]){refStart([seat]);return;}
+    if(from===seat&&o.cpu&&CPU[o.cpu]&&!c[1-seat]){refStart([0,1],{seat:1-seat,level:o.cpu});return;}
+    R.ready[from]=!!o.v; push();
+    if(c[0]&&c[1]&&R.ready[0]&&R.ready[1])refStart([0,1]);
+  }
+}
+function refStart(list,cpu){
+  var solo=list.length===1, now=performance.now(), remote=(!solo&&!cpu)?1-seat:null;
+  var m=R.match={seats:list.slice(),solo:solo,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
+    cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&R.rules==='ko',kos:[0,0],remote:remote,lastBeep:0};
+  m.tEnd=m.ko&&R.koMin?m.t0+R.koMin*60000:Infinity;
+  var kind=solo?R.kind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between a friend and the computer */
+  if(kind!==R.kind){R.wins=[0,0];R.kind=kind;}
+  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null;
+  list.forEach(function(i){
+    if(i===remote)return;
+    var g=R.games[i]=new Game(m.seed);
+    if(m.cpu===i)R.bots[i]=new Bot(g,m.level);
+    else g.sfx=function(n,a){SFX.play(n,0,a);};
+    g.onSend=function(n){refSend(i,n);};
+    g.onOver=function(){refTopOut(i);};
+  });
+  R.ready=[false,false]; R.phase='countdown';
+  clearTimeout(R.forfeit); R.forfeit=0;
+  push();
+}
+function refSend(from,n){
+  var m=R.match, to=1-from; if(!m||m.solo)return;
+  if(to===m.remote)relay({k:'atk',n:n});
+  else if(R.games[to]&&!R.games[to].over)R.games[to].receive(n);
+}
+function refTopOut(i){
+  var m=R.match; if(!m||(R.phase!=='playing'&&R.phase!=='countdown'))return;
+  if(m.solo){refFinish(null);return;}
+  var o=1-i;
+  if(!m.ko){refFinish(o);return;}
+  m.kos[o]++;
+  if(m.kos[o]>=KO_TO_WIN){refFinish(o);return;}
+  if(R.games[i])R.games[i].koUntil=performance.now()+KO_RESPAWN_MS;
+  push();
+}
+function refFinish(w){
+  if(R.phase==='result')return;
+  R.phase='result'; R.match.winner=w;
+  R.games.forEach(function(g){if(g)g.over=true;});
+  if(w!==null&&w>=0)R.wins[w]++;
+  SFX.play(w===seat?'win':'lose');
+  R.ready=[false,false]; clearTimeout(R.forfeit); R.forfeit=0;
+  push();
+}
+function refTimeUp(){
+  var m=R.match, me=seat, o=1-seat, k=m.kos, w=k[0]>k[1]?0:k[1]>k[0]?1:-1;
+  if(w<0){
+    var a=R.games[me]?R.games[me].sent:0, b=R.games[o]?R.games[o].sent:R.remoteSent;
+    w=a>b?me:b>a?o:-1;
+  }
+  refFinish(w);
+}
+function refTick(ts){
+  var m=R.match; if(!m)return;
+  if(R.phase==='countdown'){
+    var left=m.t0-ts;
+    if(left<=0){R.phase='playing';SFX.play('go');push();}
+    else{var sec=Math.ceil(left/1000);if(m.lastBeep!==sec){m.lastBeep=sec;SFX.play('tick');}}
+  }
+  if(R.phase!=='playing')return;
+  for(var i=0;i<2;i++){
+    var g=R.games[i]; if(!g)continue;
+    if(g.over&&g.koUntil&&ts>=g.koUntil)g.revive();
+    if(!g.over){if(R.bots[i])R.bots[i].tick(ts);if(!g.over)g.tick(ts,m.t0);}
+  }
+  if(R.phase==='playing'&&ts>=m.tEnd)refTimeUp();
+}
+
+/* player 2's side of a two-phone match: play the board locally, follow player 1's state */
+function guestSync(o){
+  var s=o.s, mine=!!(s.seats&&s.seats.indexOf(seat)>=0&&!s.solo&&!s.cpu), live=s.phase==='countdown'||s.phase==='playing';
+  if(mine&&live){
+    var now=performance.now();
+    if(!G||G.seed!==o.seed){
+      var g=new Game(o.seed);
+      G={game:g,seed:o.seed,t0:now+(+o.cd||0),tEnd:Infinity,lastBeep:0,went:false};
+      opp=null;
+      g.sfx=function(n,a){SFX.play(n,0,a);};
+      g.onSend=function(n){relay({k:'atk',n:n});};
+      g.onOver=function(){relay({k:'ko'}); if(hostS&&hostS.rules==='ko')g.koUntil=performance.now()+KO_RESPAWN_MS;};
+    }
+    if(s.phase==='countdown')G.t0=now+(+o.cd||0);
+    G.tEnd=o.tl>=0?now+o.tl:Infinity;
+  }else if(G&&!live){
+    G.game.over=true; G=null;
+    SFX.play(s.winner===seat?'win':'lose');
+  }
+}
+function guestTick(ts){
+  var g=G.game, left=G.t0-ts;
+  if(left>0){var sec=Math.ceil(left/1000);if(G.lastBeep!==sec){G.lastBeep=sec;SFX.play('tick');}return;}
+  if(!G.went){G.went=true;SFX.play('go');}
+  if(g.over&&g.koUntil&&ts>=g.koUntil)g.revive();
+  if(!g.over)g.tick(ts,G.t0);
+}
+
+/* messages between the two phones */
+function onPeer(from,o){
+  if(!o||typeof o!=='object'||!phoneMode())return;
+  if(o.k==='state'&&seat===1&&o.s&&typeof o.s==='object'){hostS=o.s; guestSync(o); render();}
+  else if(o.k==='hello'&&seat===0)push();
+  else if(o.k==='pad'&&seat===0&&o.o&&typeof o.o==='object')refPad(from,o.o);
+  else if(o.k==='atk'){var g=myGame()||viewGame(); if(g&&!g.over)g.receive(Math.max(0,Math.min(GARBAGE_CAP,o.n|0)));}
+  else if(o.k==='ko'&&seat===0&&R.match&&R.match.remote===from)refTopOut(from);
+  else if(o.k==='snap'){opp=o; if(seat===0&&R.match&&R.match.remote===from)R.remoteSent=o.sent|0;}
+}
+function onRoom(m){
+  var wasScreen=room.screen, wasPeer=peerOn();
+  room={seats:Array.isArray(m.seats)?m.seats:[null,null],tv:!!m.tv,screen:m.screen==='phone'?'phone':'tv'};
+  var peer=peerOn(), fresh=peer&&(!wasPeer||wasScreen!=='phone');
+  if(phoneMode()){
+    if(seat===1){
+      if(fresh)relay({k:'hello'});
+      if(!peer){G=null;hostS=null;}
+    }
+    if(seat===0){
+      if(!peer)R.ready[1]=false;
+      var m2=R.match, pvpLive=m2&&m2.remote!=null&&localLive();
+      if(pvpLive&&!peer&&!R.forfeit)R.forfeit=setTimeout(function(){R.forfeit=0;if(localLive()&&!peerOn())refFinish(seat);},FORFEIT_MS);
+      else if(peer&&R.forfeit){clearTimeout(R.forfeit);R.forfeit=0;}
+      if(fresh){push();return;}
+    }
+  }else G=null;
+  render();
+}
+
+/* the board view */
+var cvMy=$('#myBoard'), cvHold=$('#myHold'), cvNext=$('#myNext'), cvOpp=$('#oppBoard'), lcs=20, lns=11, ocs=8, hudTxt='';
+function layoutLocal(){
+  var r=surf.getBoundingClientRect(); if(!r.width)return;
+  var railW=84, W=r.width-16-railW-10, H=r.height-16;
+  lcs=Math.max(10,Math.floor(Math.min(H/ROWS,W/COLS)));
+  setCanvas(cvMy,COLS*lcs,ROWS*lcs);
+  lns=Math.max(7,Math.min(Math.floor(lcs*0.55),Math.floor(railW/4.5)));
+  setCanvas(cvHold,railW,lns*3); setCanvas(cvNext,railW,lns*6);
+  ocs=Math.floor(railW/COLS); setCanvas(cvOpp,COLS*ocs,ROWS*ocs);
+}
+function snapOf(g){
+  var grid=g.board.map(function(row){return row.slice();}), cur=g.cur, r, c, b='';
+  if(cur&&!g.over)for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++)if(cur.m[r][c]&&cur.y+r>=0)grid[cur.y+r][cur.x+c]=IDS[cur.t];
+  for(r=0;r<ROWS;r++)b+=grid[r].join('');
+  return {k:'snap',b:b,p:g.pending,a:g.armed(),sent:g.sent,ko:!!(g.over&&g.koUntil)};
+}
+function snapView(o){
+  var board=[], r, c;
+  for(r=0;r<ROWS;r++){var row=[];for(c=0;c<COLS;c++)row.push(Math.min(8,+o.b.charAt(r*COLS+c)||0));board.push(row);}
+  return {board:board,cur:null,over:!!o.ko,koUntil:o.ko?1:0,pending:Math.max(0,o.p|0),armed:function(){return Math.max(0,o.a|0);},fx:null};
+}
+function drawLocal(ts){
+  var g=viewGame(); if(!g)return;
+  drawBoard(cvMy,g,lcs); if(g.over&&g.koUntil)drawKO(cvMy,lcs);
+  drawHold(cvHold,g,lns); drawNext(cvNext,g,lns,2);
+  $('#myLines').textContent=g.lines; $('#mySent').textContent=g.sent;
+  var m=R.match, og=null, two=G||(m&&!m.solo);
+  if(!G&&m&&m.cpu!=null)og=R.games[m.cpu];
+  else if(opp&&typeof opp.b==='string'&&opp.b.length===ROWS*COLS)og=snapView(opp);
+  $('#oppBox').hidden=!two;
+  if(two){
+    $('#oppName').textContent=!G&&m&&m.cpu!=null?'CPU':'Player '+(seat===0?2:1);
+    if(og){drawBoard(cvOpp,og,ocs); if(og.over&&og.koUntil)drawKO(cvOpp,ocs);} else drawEmptyBoard(cvOpp);
+  }
+  var t0=G?G.t0:(m?m.t0:0), left=t0-ts, cd=$('#cdNum');
+  cd.hidden=left<=0; if(left>0)cd.textContent=Math.ceil(left/1000);
+  var tEnd=G?G.tEnd:(m?m.tEnd:Infinity), kos=S.kos, txt='';
+  if(kos)txt+='KO '+kos[seat]+'–'+kos[seat===0?1:0];
+  if(tEnd<Infinity){var rem=Math.min(tEnd-ts,tEnd-Math.max(ts,t0)), sec=Math.max(0,Math.ceil(rem/1000));txt+=(txt?'|':'')+(rem<=30000?'!':'')+Math.floor(sec/60)+':'+('0'+sec%60).slice(-2);}
+  if(txt!==hudTxt){
+    hudTxt=txt;
+    $('#hud').innerHTML=txt.split('|').map(function(x){return x.charAt(0)==='!'?'<span class="low">'+x.slice(1)+'</span>':'<span>'+x+'</span>';}).join('');
+  }
+}
+function loop(ts){
+  if(phoneMode()){
+    if(R.match)refTick(ts);
+    if(G)guestTick(ts);
+    if(!$('#local').hidden)drawLocal(ts);
+    var mine=G?G.game:(R.match&&R.match.remote!=null&&R.phase==='playing'?R.games[seat]:null);
+    if(mine&&ts-snapAt>=100){snapAt=ts;relay(snapOf(mine));}
+  }
+  requestAnimationFrame(loop);
+}
+
 
 /* ---------------------------------------------------------- swipe */
 var surf=$('#surface'), flashEl=$('#flash'), sw=null, flashT=0;
@@ -287,19 +581,22 @@ function swEnd(e){
   var s=sw; sw=null;
   if(e.type==='pointercancel')return;
   var dx=e.clientX-s.x0, dy=e.clientY-s.y0, dt=Math.max(1,performance.now()-s.t0);
-  if(Math.hypot(dx,dy)<12&&dt<300){key('U');flash('Turn');return;}
+  if(Math.hypot(dx,dy)<12&&dt<300){key('U');hint('Turn');return;}
   var h0=s.hist[0], vy=(e.clientY-h0.y)/Math.max(1,performance.now()-h0.t);
   var k=sensK();
-  if(s.mode==='v'&&dy>60*k&&vy>0.65*k){key('H');flash('Drop');}
-  else if(s.mode==='v'&&dy<-60*k&&vy<-0.55*k){key('C');flash('Hold');}
+  if(s.mode==='v'&&dy>60*k&&vy>0.65*k){key('H');hint('Drop');}
+  else if(s.mode==='v'&&dy<-60*k&&vy<-0.55*k){key('C');hint('Hold');}
 }
 surf.addEventListener('pointerup',swEnd);
 surf.addEventListener('pointercancel',swEnd);
 surf.addEventListener('contextmenu',function(e){e.preventDefault();});
 document.addEventListener('gesturestart',function(e){e.preventDefault();});
 
+window.addEventListener('resize',function(){if(!$('#local').hidden)layoutLocal();});
 render();
 connect();
+requestAnimationFrame(loop);
+window.BDP={get R(){return R;},get G(){return G;},get room(){return room;},get S(){return S;}};
 })();
 </script>
 </body>

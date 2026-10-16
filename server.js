@@ -206,6 +206,7 @@ const server = http.createServer((req, res) => {
   try {
     if (url === '/' || url === '/tv') return send(200, 'text/html; charset=utf-8', file('tv.html'));
     if (url === '/play') return send(200, 'text/html; charset=utf-8', file('play.html'));
+    if (url === '/game.js') return send(200, 'text/javascript; charset=utf-8', file('game.js'));
     if (url === '/qr.svg') return send(200, 'image/svg+xml', qrSvg(PLAY_URL));
     if (url === '/info') return send(200, 'application/json', JSON.stringify({ playUrl: PLAY_URL, tvUrl: BASE + '/' }));
   } catch (e) {
@@ -304,10 +305,21 @@ const conns = new Set();
 let tv = null;
 const seats = [null, null]; /* each: { id, conn } */
 let lastState = null;
+/* Where the game is shown: 'tv' (the TV page runs it) or 'phone' (each phone shows its own board, and in a two-phone match
+   player 1's phone keeps score). A phone picks it; with no TV page open it is always 'phone'. */
+let screenPref = 'tv';
+let tvGoneAt = 0;   /* a TV page that comes back within TV_GRACE_MS (a reload) keeps the room as it was */
+const TV_GRACE_MS = 15000;
 
 function send(c, obj) { if (c && c.open) c.send(JSON.stringify(obj)); }
 function seatInfo() { return seats.map((s) => (s ? { connected: !!(s.conn && s.conn.open) } : null)); }
-function pushSeats() { send(tv, { t: 'seats', seats: seatInfo() }); }
+function tvOn() { return !!(tv && tv.open); }
+function screen() { return tvOn() ? screenPref : 'phone'; }
+function pushSeats() {
+  send(tv, { t: 'seats', seats: seatInfo(), screen: screen() });
+  const room = { t: 'room', seats: seatInfo(), tv: tvOn(), screen: screen() };
+  seats.forEach((s) => { if (s) send(s.conn, room); });
+}
 
 function handle(conn) {
   let role = null;
@@ -320,6 +332,8 @@ function handle(conn) {
       if (m.t !== 'hello') return;
       if (m.role === 'tv') {
         role = 'tv';
+        /* phones already playing on their own stay that way when a TV page opens; a phone can switch to it */
+        if (!tvOn() && Date.now() - tvGoneAt > TV_GRACE_MS && seats.some((s) => s && s.conn && s.conn.open)) screenPref = 'phone';
         if (tv && tv !== conn) tv.close(4000);
         tv = conn;
         pushSeats();
@@ -334,7 +348,7 @@ function handle(conn) {
         role = 'pad';
         seat = i;
         send(conn, { t: 'seat', seat: i });
-        if (lastState) send(conn, { t: 'tv', m: lastState });
+        if (lastState && tvOn()) send(conn, { t: 'tv', m: lastState });
         pushSeats();
       }
       return;
@@ -345,6 +359,13 @@ function handle(conn) {
         seats.forEach((s) => { if (s) send(s.conn, { t: 'tv', m: m.m }); });
       }
     } else if (role === 'pad') {
+      if (m.t === 'screen' && (m.v === 'tv' || m.v === 'phone')) { screenPref = m.v; pushSeats(); return; }
+      if (m.t === 'p' && m.m && typeof m.m === 'object') {      /* phone mode: pass straight to the other phone */
+        const o = seats[1 - seat];
+        if (o) send(o.conn, { t: 'p', from: seat, m: m.m });
+        return;
+      }
+      if (screen() !== 'tv') return;
       if ((m.t === 'in' && typeof m.k === 'string' && m.k.length <= 8) || m.t === 'ready' || m.t === 'rules' || m.t === 'kotime') {
         send(tv, { t: 'pad', seat, m: { t: m.t, k: m.k, v: !!m.v, solo: !!m.solo, cpu: ['easy', 'normal', 'hard'].includes(m.cpu) ? m.cpu : undefined, min: Number.isInteger(m.min) ? m.min : undefined } });
       }
@@ -352,7 +373,7 @@ function handle(conn) {
   };
   conn.onclose = () => {
     conns.delete(conn);
-    if (role === 'tv' && tv === conn) tv = null;
+    if (role === 'tv' && tv === conn) { tv = null; tvGoneAt = Date.now(); pushSeats(); }
     if (role === 'pad' && seat >= 0 && seats[seat] && seats[seat].conn === conn) {
       seats[seat].conn = null;
       pushSeats();
