@@ -277,7 +277,7 @@ Bot.prototype.tick=function(ts){
 /* ------------------------------------------------------------- sound */
 /* Everything is synthesised with Web Audio, so there are no audio files. Browsers keep audio locked until the page has been clicked or a key pressed once, so the TV page asks for that. Press M to mute. */
 var SFX=(function(){
-  var ctx=null, master=null, on=true, small=false, unlocked=false, api;
+  var ctx=null, master=null, on=true, small=false, unlocked=false, stale=false, api;
   try{on=localStorage.getItem('bd-sound')!=='0';}catch(e){}
   function badge(){
     if(api&&api.onchange)api.onchange();
@@ -289,6 +289,13 @@ var SFX=(function(){
   function init(){
     /* iPhone: Web Audio is muted by the silent switch unless the page asks for media playback (Safari 16.4 and later) */
     try{if(navigator.audioSession&&navigator.audioSession.type!=='playback')navigator.audioSession.type='playback';}catch(e){}
+    /* After the page was hidden (screen lock, app switch) iOS can leave the context reporting 'running' while it plays nothing,
+       so a context that went through that is closed and a fresh one is made inside this tap. */
+    if(ctx&&(stale||ctx.state==='interrupted'||ctx.state==='closed')){
+      var old=ctx; ctx=null; master=null; unlocked=false;
+      try{old.onstatechange=null; old.close();}catch(e){}
+    }
+    stale=false;
     if(!ctx){
       var AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
       ctx=new AC(); master=ctx.createGain(); master.gain.value=small?0.9:0.55; master.connect(ctx.destination);
@@ -302,6 +309,10 @@ var SFX=(function(){
   }
   /* Phone speakers cannot play much below 300 Hz, so on a phone the low thuds are moved up and everything is louder. */
   function phone(){small=true; if(master)master.gain.value=0.9;}
+  function reset(){if(ctx)stale=true;}   /* rebuild the context on the next tap */
+  document.addEventListener('visibilitychange',function(){if(document.hidden)reset();});
+  window.addEventListener('pagehide',reset);
+  window.addEventListener('pageshow',function(e){if(e.persisted)reset();});
   function out(pan){
     if(ctx.createStereoPanner&&pan){var p=ctx.createStereoPanner();p.pan.value=pan;p.connect(master);return p;}
     return master;
@@ -347,10 +358,10 @@ var SFX=(function(){
   }
   function toggle(){on=!on;try{localStorage.setItem('bd-sound',on?'1':'0');}catch(e){} badge();}
   /* phones only unlock audio on the end of a touch (touchend, pointerup, click), not on touchstart */
-  ['pointerdown','pointerup','touchstart','touchend','click','keydown'].forEach(function(ev){document.addEventListener(ev,function(e){if(ev==='keydown'&&(e.key==='m'||e.key==='M'))return;init();},{passive:true});});
+  ['pointerdown','pointerup','touchstart','touchend','click','keydown'].forEach(function(ev){document.addEventListener(ev,function(e){if(ev==='keydown'&&(e.key==='m'||e.key==='M'))return;init();},{passive:true,capture:true});});   /* capture, so a rebuilt context is ready before the tap's own sound plays */
   document.addEventListener('keydown',function(e){if(e.key==='m'||e.key==='M'){init();toggle();}});
   badge();
-  api={init:init,play:play,toggle:toggle,phone:phone,onchange:null,isOn:function(){return on;},state:function(){return ctx?ctx.state:'none';}};
+  api={init:init,play:play,toggle:toggle,phone:phone,reset:reset,onchange:null,isOn:function(){return on;},state:function(){return ctx?ctx.state:'none';}};
   return api;
 })();
 

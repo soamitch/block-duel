@@ -135,7 +135,7 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 'use strict';
 function $(s){return document.querySelector(s);}
 var SEATCOL=['var(--p1)','var(--p2)'];
-var ws=null, seat=-1, retry=0, noRetry=false, alive=false;
+var ws=null, seat=-1, retry=0, noRetry=false, alive=false, wasLive=false;
 var S={phase:'lobby',ready:[false,false],conn:[false,false],wins:[0,0],winner:null,solo:false,cpu:null,rules:'ko',koMin:3,kos:null};
 var lastTv=S;                      /* latest state from the TV page */
 
@@ -176,7 +176,10 @@ function connect(){
   clearTimeout(retry);
   if(noRetry)return;
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  ws.onopen=function(){alive=true;setNet(true);ws.send(JSON.stringify({t:'hello',role:'pad',id:myId}));render();};
+  ws.onopen=function(){
+    if(wasLive)SFX.reset();           /* a dropped connection usually means the phone slept; start audio afresh on the next tap */
+    wasLive=true; alive=true; setNet(true); ws.send(JSON.stringify({t:'hello',role:'pad',id:myId})); render();
+  };
   ws.onmessage=function(e){
     var m; try{m=JSON.parse(e.data);}catch(x){return;}
     if(m.t==='seat'){seat=m.seat;render();}
