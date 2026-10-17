@@ -41,6 +41,9 @@ Both phones must be on the same Wi-Fi as the computer running the server.
 One phone alone can tap "Play on my own" for a practice run, or play the computer
 (Easy, Normal or Hard).
 
+In versus both players are always on the same level. It rises with both players' lines
+together and with match time, and a "Level N · Faster" banner shows on both boards when it goes up.
+
 **Rules** (either phone can change them in the lobby):
 - **KO** (default): topping out clears your board and gives the other player a KO.
   First to 3 KOs wins. Pick a time limit of 2, 3 or 5 minutes, or none; when time
@@ -48,8 +51,10 @@ One phone alone can tap "Play on my own" for a practice run, or play the compute
 - **Classic**: top out once and you lose.
 
 **Power-ups** (versus, on by default, Powers: On / Off in the lobby): now and then a piece
-shimmers through the power colours as it falls. When you place it, it settles on one power
-and its blocks keep that colour. The power goes off when you clear a line holding one of
+glows in a power's colour as it falls, with a tag naming the power. It steps through the
+powers in a fixed order, about 0.7 seconds each (the tag's bar runs down to the next one and
+shows what comes next), and settles on whichever power is showing when it lands, so time your
+drop to pick it. Its blocks keep that colour. The power goes off when you clear a line holding one of
 those blocks, so you choose when to send it; the piece's other blocks then turn grey. Both
 players get them on the same pieces.
 - **Fill** (gold): lines up the gaps in your stack (up to 8 rows) into one open column, ready for a long piece.
@@ -68,6 +73,14 @@ board (16 columns), each dropping your own pieces (outlined in your colour) with
 hold and next. Falling pieces pass through each other; they only meet once placed. Clear lines together; speed rises over time, and the run ends when the
 stack reaches the top. The best run is remembered. Works on the TV and on phones only
 (there, player 1's phone runs the board and player 2 sees it a moment later over Wi-Fi).
+
+**Co-op against the computer**: in co-op, set Against to Easy, Normal or Hard. You two share
+one wide board against a computer team on another; lines send garbage across, power pieces
+work as in versus (an attack hits both of you, a Shield covers both), and KO rules and the
+time limit apply. Both boards share one level.
+
+**Pause**: tap the pause button at the top of a phone during a game. Everything freezes for
+both players. Either phone can Resume, or End match to go back to the lobby (nobody scores).
 
 ## Playing on phones only
 

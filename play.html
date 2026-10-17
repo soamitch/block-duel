@@ -64,6 +64,10 @@ main{flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overfl
 #local.coop .rail{flex-direction:row; width:auto; align-items:center; gap:10px; order:-1}
 #local.coop .rail .st{margin-top:0; gap:6px}
 #local.coop #oppBox{display:none}
+#local.coop.vs #oppBox{display:block}
+#local.coop.vs #oppBox .lbl{display:block; margin:0 0 2px}
+.pausebtn{min-height:40px; min-width:48px; padding:0 12px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--fg); font:700 15px var(--font-ui); touch-action:manipulation}
+#pauseBox{display:flex; flex-direction:column; gap:10px; margin-top:auto}
 #local{perspective:1400px}
 .flipper{transition:transform .75s cubic-bezier(.45,-0.25,.35,1.25); transform-style:preserve-3d}
 .flipper.flipped{transform:rotateX(180deg)}
@@ -90,12 +94,17 @@ details.mine > *+*{margin-top:10px}
   <header>
     <div class="chip" id="chip"><i></i><span id="chipTxt">Connecting</span></div>
     <div class="hud" id="hud" hidden></div>
+    <button class="pausebtn" id="pauseBtn" hidden aria-label="Pause">❚❚</button>
     <div class="net" id="net"><i></i><span id="netTxt">Offline</span></div>
   </header>
   <main>
     <div class="msg" id="msg">
       <h1 id="title">Connecting</h1>
       <p id="sub"></p>
+    </div>
+    <div id="pauseBox" hidden>
+      <button class="btn primary" id="resumeBtn">Resume</button>
+      <button class="btn small" id="endBtn">End match</button>
     </div>
     <div class="actions" id="actions" hidden>
       <div class="opt" id="screenRow">
@@ -105,6 +114,10 @@ details.mine > *+*{margin-top:10px}
       <div class="opt" id="modeRow">
         <span class="lbl">Mode</span>
         <button class="btn small" data-mode="versus" aria-pressed="false">Versus</button><button class="btn small" data-mode="coop" aria-pressed="false">Co-op</button>
+      </div>
+      <div class="opt" id="vsRow" style="--n:4">
+        <span class="lbl">Against</span>
+        <button class="btn small" data-coopcpu="">No one</button><button class="btn small" data-coopcpu="easy">Easy</button><button class="btn small" data-coopcpu="normal">Normal</button><button class="btn small" data-coopcpu="hard">Hard</button>
       </div>
       <div class="opt" id="rulesRow">
         <span class="lbl">Rules</span>
@@ -233,9 +246,10 @@ var BUZZ={L:8,R:8,D:5,U:12,C:[10,40,10],H:[28,30,16]};
 /* in TV mode the phone plays the sound of each input itself; in phone mode the board on this phone makes all the sounds */
 var KEY_SFX={L:'move',R:'move',U:'rotate',Z:'rotate',H:'hard',C:'hold'};
 function key(k){
+  if(S.paused)return;
   vibe(BUZZ[k]||8);
   if(!phoneMode()){sendMsg({t:'in',k:k});if(KEY_SFX[k]&&S.phase==='playing')SFX.play(KEY_SFX[k],0);return;}
-  if(G&&G.coop){relay({k:'in',key:k});if(KEY_SFX[k]&&performance.now()>=G.t0)SFX.play(KEY_SFX[k],0);return;}
+  if(G&&G.coop){relay({k:'in',key:k});if(KEY_SFX[k]&&gameNow()>=G.t0)SFX.play(KEY_SFX[k],0);return;}
   if(R.match&&R.match.coop){if(R.co&&R.phase==='playing')R.co.apply(seat,k);return;}
   var g=myGame(); if(g&&!g.over)g.apply(k);
 }
@@ -268,17 +282,27 @@ function render(){
   var c=seat===0||seat===1?SEATCOL[seat]:'var(--dim)';
   document.documentElement.style.setProperty('--c',c);
   $('#chipTxt').textContent=seat===0||seat===1?'Player '+(seat+1):'Block Duel';
-  var title='', sub='', btn='', showReady=false, showSolo=false, playing=false;
+  var title='', sub='', btn='', showReady=false, showSolo=false, playing=false, showPause=false;
   var other=seat===0?1:0;
   if(seat===-2){title='Both seats are taken';sub='Two phones are already connected. Close this page on one of them, then reload.';}
   else if(seat===-3){title='Seat taken';sub='This seat was taken by another browser on your phone. Close the other tab, then reload this page.';}
   else if(seat<0||!alive){title=alive?'Joining':'Reconnecting';sub='Make sure this phone is on the same Wi-Fi as the TV.';}
   else if((S.phase==='countdown'||S.phase==='playing')&&S.seats&&S.seats.indexOf(seat)<0){title='Match in progress';sub=S.cpu?'Player '+(other+1)+' is playing the computer. You can join when it ends.':'Player '+(other+1)+' is playing on their own. You can join when it ends.';}
   else if((S.phase==='countdown'||S.phase==='playing')&&S.cpu&&S.cpu.seat===seat){title='Match in progress';sub='Player '+(other+1)+' is playing the computer. You can join when it ends.';}
+  else if((S.phase==='countdown'||S.phase==='playing')&&S.paused){
+    title='Paused'; sub=(S.pausedBy===seat?'You':'Player '+(S.pausedBy+1))+' paused the game.'; showPause=true;
+  }
   else if(S.phase==='countdown'||S.phase==='playing'){playing=true;}
   else if(S.phase==='result'&&!(S.cpu&&S.cpu.seat===seat)&&!(S.seats&&S.seats.indexOf(seat)<0)){
     showReady=true; showSolo=false;
-    if(S.coop){
+    if(S.coop&&S.coop.cpu){
+      title=S.winner===0?'You won':S.winner===1?'You lost':'Draw';
+      sub='Wins: your team '+S.wins[0]+', computer '+S.wins[1]+'.';
+      btn=S.ready[seat]?'Not ready':'Play again';
+      if(S.ready[seat])sub+=' Waiting for player '+(other+1)+'.';
+      if(!S.conn[other]){sub+=' Player '+(other+1)+' has left.';showSolo=true;}
+    }
+    else if(S.coop){
       var cl=S.coop.lines|0;
       title=cl>0&&cl>=S.coop.best?'New best':'Game over';
       sub='You cleared '+cl+(cl===1?' line':' lines')+' together. Best: '+(S.coop.best|0)+'.';
@@ -314,17 +338,21 @@ function render(){
   $('#readyBtn').textContent=btn;
   show($('#soloBtn'),showSolo);
   show($('#cpuRow'),showSolo);
-  var showRules=showReady&&!(S.phase==='result'&&S.solo), coop=S.mode==='coop';
+  var showRules=showReady&&!(S.phase==='result'&&S.solo), coop=S.mode==='coop', ccpu=coop&&!!S.coopCpu;
+  show($('#pauseBox'),showPause); show($('#pauseBtn'),playing);
+  show($('#vsRow'),showRules&&coop);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-coopcpu]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-coopcpu')===(S.coopCpu||'')));});
   show($('#modeRow'),showRules);
   Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-mode')===(coop?'coop':'versus')));});
-  show($('#rulesRow'),showRules&&!coop); show($('#rulesNote'),showRules);
+  show($('#rulesRow'),showRules&&(!coop||ccpu)); show($('#rulesNote'),showRules);
   Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-rules')===(S.rules||'ko')));});
   var ko=S.rules!=='classic', km=S.koMin==null?3:S.koMin;
-  show($('#timeRow'),showRules&&ko&&!coop);
+  show($('#timeRow'),showRules&&ko&&(!coop||ccpu));
   Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){b.setAttribute('aria-pressed',String(+b.getAttribute('data-min')===km));});
-  $('#rulesNote').textContent=coop?'Build one wide board together and clear lines as a team. Needs both phones; the computer and practice buttons still play versus.':!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
+  $('#rulesNote').textContent=ccpu?'You two share one wide board against a computer team on another. Lines send garbage across'+(S.powers!==false?' and power pieces work as in versus.':'.'):
+    coop?'Build one wide board together and clear lines as a team. Needs both phones; the computer and practice buttons still play versus.':!ko?'Top out once and you lose.':'Topping out costs a KO, not the match. First to 3 KOs'+(km?', or most KOs in '+km+' minutes.':' wins.');
   show($('#mine'),showReady); soundNote(showReady);
-  show($('#powersRow'),showRules&&!coop);
+  show($('#powersRow'),showRules&&(!coop||ccpu));
   Array.prototype.forEach.call(document.querySelectorAll('[data-powers]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-powers')==='1')===(S.powers!==false)));});
   Array.prototype.forEach.call(document.querySelectorAll('[data-pack]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-pack')===myPack));});
   Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-sound')==='1')===SFX.isOn()));});
@@ -350,6 +378,12 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function
 Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'),function(b){
   b.addEventListener('click',function(){act({t:'rules',v:b.getAttribute('data-rules')==='ko'});});
 });
+Array.prototype.forEach.call(document.querySelectorAll('[data-coopcpu]'),function(b){
+  b.addEventListener('click',function(){act({t:'coopcpu',p:b.getAttribute('data-coopcpu')});});
+});
+$('#pauseBtn').addEventListener('click',function(){act({t:'pause',v:true});});
+$('#resumeBtn').addEventListener('click',function(){act({t:'pause',v:false});});
+$('#endBtn').addEventListener('click',function(){act({t:'end'});});
 Array.prototype.forEach.call(document.querySelectorAll('[data-powers]'),function(b){
   b.addEventListener('click',function(){act({t:'powers',v:b.getAttribute('data-powers')==='1'});});
 });
@@ -422,15 +456,16 @@ function act(o){
 function viewGame(){return G?(G.game||null):(R.match&&R.games[seat])||null;}
 function myGame(){
   if(G&&G.coop)return null;
-  if(G)return performance.now()>=G.t0?G.game:null;
+  if(G)return gameNow()>=G.t0?G.game:null;
   return R.match&&R.phase==='playing'?R.games[seat]:null;
 }
 
 /* the scorekeeper: the same flow as the TV page, for this phone's own matches and, on player 1's phone, two-phone matches */
-var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,mode:'versus',powers:true,co:null,coopBest:0,coEv:[],match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
+var R={phase:'lobby',ready:[false,false],wins:[0,0],rules:'ko',koMin:3,mode:'versus',powers:true,coopCpu:'',paused:false,pausedBy:-1,co2:null,cbots:[null,null],co:null,coopBest:0,coEv:[],match:null,games:[null,null],bots:[null,null],remoteSent:0,forfeit:0,kind:''};
 try{
   if(localStorage.getItem('bd-mode')==='coop')R.mode='coop';
   if(localStorage.getItem('bd-powers')==='0')R.powers=false;
+  var cc0=localStorage.getItem('bd-coopcpu'); if(CPU[cc0])R.coopCpu=cc0;
   R.coopBest=+localStorage.getItem('bd-coop-best')||0;
   if(localStorage.getItem('bd-rules')==='classic')R.rules='classic';
   var km=localStorage.getItem('bd-komin'); if(km!==null&&KO_MINUTES.indexOf(+km)>=0)R.koMin=+km;
@@ -440,18 +475,25 @@ function refState(){
   var m=R.match;
   return {phase:R.phase,ready:R.ready.slice(),conn:refConn(),wins:R.wins.slice(),winner:m?m.winner:null,solo:!!(m&&m.solo),
     cpu:m&&m.cpu!=null?{seat:m.cpu,level:m.level}:null,rules:R.rules,koMin:R.koMin,kos:m&&m.ko?m.kos.slice():null,
-    mode:R.mode,powers:R.powers,coop:m&&m.coop?{lines:R.co?R.co.lines:0,best:R.coopBest}:null,
+    mode:R.mode,powers:R.powers,coopCpu:R.coopCpu,paused:R.paused,pausedBy:R.pausedBy,
+    coop:m&&m.coop?{lines:R.co?R.co.lines:0,best:R.coopBest,cpu:m.vsCpu||null}:null,
     seats:m?m.seats.filter(function(i){return i!==m.cpu;}):null};
 }
 function push(){
   render();
   if(phoneMode()&&seat===0&&peerOn()){
-    var m=R.match, now=performance.now();
+    var m=R.match, now=gameNow();
     relay({k:'state',s:refState(),seed:m?m.seed:0,cd:m?Math.max(0,m.t0-now):0,tl:m&&m.tEnd<Infinity?m.tEnd-now:-1});
   }
 }
 function refPad(from,o){
+  if(o.t==='pause'&&localLive()){
+    if(!!o.v!==R.paused){R.paused=!!o.v; R.pausedBy=R.paused?from:-1; if(R.paused)pauseClock(); else resumeClock(); push();}
+    return;
+  }
+  if(o.t==='end'&&localLive()){refEnd();return;}
   if(R.phase!=='lobby'&&R.phase!=='result')return;
+  if(o.t==='coopcpu'){R.coopCpu=CPU[o.p]?o.p:'';try{localStorage.setItem('bd-coopcpu',R.coopCpu);}catch(e){} push();return;}
   if(o.t==='rules'){R.rules=o.v?'ko':'classic';try{localStorage.setItem('bd-rules',R.rules);}catch(e){} push();}
   else if(o.t==='powers'){R.powers=!!o.v;try{localStorage.setItem('bd-powers',R.powers?'1':'0');}catch(e){} push();}
   else if(o.t==='mode'){R.mode=o.v?'coop':'versus';try{localStorage.setItem('bd-mode',R.mode);}catch(e){} push();}
@@ -467,13 +509,13 @@ function refPad(from,o){
   }
 }
 function refStart(list,cpu){
-  var solo=list.length===1, now=performance.now(), remote=(!solo&&!cpu)?1-seat:null;
+  var solo=list.length===1, now=gameNow(), remote=(!solo&&!cpu)?1-seat:null;
   var m=R.match={seats:list.slice(),solo:solo,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
     cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&R.rules==='ko',kos:[0,0],remote:remote,lastBeep:0};
   m.tEnd=m.ko&&R.koMin?m.t0+R.koMin*60000:Infinity;
   var kind=solo?R.kind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between a friend and the computer */
   if(kind!==R.kind){R.wins=[0,0];R.kind=kind;}
-  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; opp=null; G=null; R.co=null; R.seenHits=0;
+  R.games=[null,null]; R.bots=[null,null]; R.remoteSent=0; R.remoteLines=0; opp=null; G=null; R.co=null; R.seenHits=0;
   list.forEach(function(i){
     if(i===remote)return;
     var g=R.games[i]=new Game(m.seed,{powers:R.powers&&!solo});
@@ -489,17 +531,45 @@ function refStart(list,cpu){
   push();
 }
 /* phones-only co-op runs on player 1's phone; player 2's inputs come in as 'in' messages and the board goes back as 'cosnap' */
+/* back to the lobby from the pause screen; nobody scores */
+function refEnd(){
+  resumeClock(); R.paused=false; R.pausedBy=-1;
+  R.phase='lobby'; R.match=null; R.games=[null,null]; R.bots=[null,null]; R.co=null; R.co2=null; R.cbots=[null,null]; R.ready=[false,false];
+  clearTimeout(R.forfeit); R.forfeit=0;
+  push();
+}
+/* a team's board topped out in co-op vs the computer (team 0 is you two, 1 the computer) */
+function refTeamOut(team){
+  var m=R.match; if(!m||(R.phase!=='playing'&&R.phase!=='countdown'))return;
+  var other=1-team, c=team===0?R.co:R.co2;
+  if(!m.ko){refFinish(other);return;}
+  m.kos[other]++;
+  if(m.kos[other]>=KO_TO_WIN){refFinish(other);return;}
+  c.koUntil=gameNow()+KO_RESPAWN_MS; SFX.play('ko',0);
+  push();
+}
 function refStartCoop(){
-  var now=performance.now();
-  var m=R.match={seats:[0,1],solo:false,coop:true,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
-    cpu:null,level:null,ko:false,kos:[0,0],remote:1-seat,lastBeep:0,tEnd:Infinity};
-  R.games=[null,null]; R.bots=[null,null]; opp=null; G=null; R.coEv=[];
-  var co=R.co=new CoopGame(m.seed); co.pal=packPal(seat===0?myPack:'classic');
+  var now=gameNow(), vs=R.coopCpu||null;
+  resumeClock(); R.paused=false; R.pausedBy=-1;
+  var m=R.match={seats:[0,1],solo:false,coop:true,vsCpu:vs,seed:Math.floor(Math.random()*2147483647),t0:now+COUNTDOWN,winner:null,
+    cpu:null,level:null,ko:!!vs&&R.rules==='ko',kos:[0,0],remote:1-seat,lastBeep:0,tEnd:Infinity};
+  if(m.ko&&R.koMin)m.tEnd=m.t0+R.koMin*60000;
+  if(vs){var kind='coopcpu-'+vs; if(kind!==R.kind){R.wins=[0,0];R.kind=kind;}}
+  R.games=[null,null]; R.bots=[null,null]; opp=null; G=null; R.coEv=[]; R.co2=null; R.cbots=[null,null];
+  var co=R.co=new CoopGame(m.seed,{powers:!!vs&&R.powers}); co.pal=packPal(seat===0?myPack:'classic');
+  if(vs){
+    var c2=R.co2=new CoopGame(m.seed,{powers:R.powers}); c2.marks=['#e9edf2','#8996a8'];
+    c2.sfx=function(i,n,a){if(n==='zap'||n==='block')SFX.play(n,0,a);};
+    c2.onOver=function(){refTeamOut(1);};
+    R.cbots=[new Bot(c2.p[0],vs),new Bot(c2.p[1],vs)];
+    co.onSend=function(n){if(!c2.over)c2.receive(n);}; c2.onSend=function(n){if(!co.over)co.receive(n);};
+    co.onPower=function(pw){if(!c2.over)c2.hit(pw);}; c2.onPower=function(pw){if(!co.over)co.hit(pw);};
+  }
   co.sfx=function(i,n,a){
     if(i===seat||n==='clear')SFX.play(n,0,a);          /* the other player's moves sound on their own phone */
     if(n==='clear'||n==='lock')R.coEv.push(n);
   };
-  co.onOver=function(){if(R.phase==='playing'||R.phase==='countdown')refFinish(null);};
+  co.onOver=function(){if(R.phase!=='playing'&&R.phase!=='countdown')return; if(vs)refTeamOut(0); else refFinish(null);};
   R.ready=[false,false]; R.phase='countdown';
   clearTimeout(R.forfeit); R.forfeit=0;
   push(); layoutLocal();
@@ -509,7 +579,9 @@ function coSnap(){
   for(r=0;r<ROWS;r++)b+=co.board[r].join('');
   function cur(g){return g.cur&&!co.over?{t:g.cur.t,m:g.cur.m,x:g.cur.x,y:g.cur.y}:null;}
   var ev=R.coEv; R.coEv=[];
-  return {k:'cosnap',b:b,c:[cur(co.p[0]),cur(co.p[1])],q:o.queue.slice(0,2),h:o.held,ch:o.canHold,ln:co.lines,lv:co.level,ev:ev};
+  var out={k:'cosnap',b:b,c:[cur(co.p[0]),cur(co.p[1])],q:o.queue.slice(0,2),h:o.held,ch:o.canHold,ln:co.lines,lv:co.level,ev:ev,fl:co.fxOn('flip'),ko:!!(co.over&&co.koUntil)};
+  if(R.co2){var ob=''; for(r=0;r<ROWS;r++)ob+=R.co2.board[r].map(function(v){return v.toString(36);}).join(''); out.ob=ob;}
+  return out;
 }
 function refSend(from,n){
   var m=R.match, to=1-from; if(!m||m.solo)return;
@@ -523,19 +595,22 @@ function refTopOut(i){
   if(!m.ko){refFinish(o);return;}
   m.kos[o]++;
   if(m.kos[o]>=KO_TO_WIN){refFinish(o);return;}
-  if(R.games[i])R.games[i].koUntil=performance.now()+KO_RESPAWN_MS;
+  if(R.games[i])R.games[i].koUntil=gameNow()+KO_RESPAWN_MS;
   push();
 }
 function refFinish(w){
   if(R.phase==='result')return;
-  R.phase='result'; R.match.winner=R.match.coop?null:w;
-  if(R.match.coop){
+  R.phase='result'; R.match.winner=R.match.coop&&!R.match.vsCpu?null:w;
+  resumeClock(); R.paused=false; R.pausedBy=-1;
+  if(R.co2)R.co2.die();
+  if(R.match.coop&&R.match.vsCpu){if(R.co)R.co.die();}
+  else if(R.match.coop){
     w=null;
     if(R.co){R.co.die(); if(R.co.lines>R.coopBest){R.coopBest=R.co.lines;try{localStorage.setItem('bd-coop-best',String(R.coopBest));}catch(e){}}}
   }
   R.games.forEach(function(g){if(g)g.over=true;});
   if(w!==null&&w>=0)R.wins[w]++;
-  SFX.play(R.match.coop?(R.co&&R.co.lines>0&&R.co.lines>=R.coopBest?'win':'lose'):(w===seat?'win':'lose'));
+  SFX.play(R.match.coop&&R.match.vsCpu?(w===0?'win':'lose'):R.match.coop?(R.co&&R.co.lines>0&&R.co.lines>=R.coopBest?'win':'lose'):(w===seat?'win':'lose'));
   R.ready=[false,false]; clearTimeout(R.forfeit); R.forfeit=0;
   push();
 }
@@ -555,7 +630,27 @@ function refTick(ts){
     else{var sec=Math.ceil(left/1000);if(m.lastBeep!==sec){m.lastBeep=sec;SFX.play('tick');}}
   }
   if(R.phase!=='playing')return;
-  if(R.co){var before=R.co.lines; R.co.tick(ts,m.t0); if(R.co.lines!==before&&R.phase==='playing')push(); return;}
+  if(R.co){
+    var teams=[R.co,R.co2].filter(function(c){return c;}), before=R.co.lines, clv=R.co.level;
+    teams.forEach(function(c){if(c.over&&c.koUntil&&ts>=c.koUntil)c.revive();});
+    if(R.co2){                                     /* co-op vs the computer: one level for both teams */
+      var lv=1+Math.floor((R.co.lines+R.co2.lines)/(COOP_LEVEL_LINES*2))+Math.floor(Math.max(0,ts-m.t0)/LEVEL_EVERY_MS);
+      if(m.lv&&lv>m.lv){teams.forEach(function(c){levelUp(c,lv);}); SFX.play('level');}
+      m.lv=lv; teams.forEach(function(c){c.levelOverride=lv;});
+      R.cbots.forEach(function(b){if(b&&!R.co2.over)b.tick(ts);});
+    }
+    teams.forEach(function(c){if(!c.over)c.tick(ts,m.t0);});
+    if(!R.co2&&R.co.level>clv&&clv>0){levelUp(R.co,R.co.level);SFX.play('level');}
+    if(R.co.lines!==before&&R.phase==='playing')push();
+    if(R.phase==='playing'&&ts>=m.tEnd){var k=m.kos, w=k[0]>k[1]?0:k[1]>k[0]?1:-1; if(w<0){var a=R.co.sentAll(), b2=R.co2.sentAll(); w=a>b2?0:b2>a?1:-1;} refFinish(w);}
+    return;
+  }
+  if(!m.solo){                                     /* versus: one level for both players (the other phone's lines come in its snapshots) */
+    var o=1-seat, lines=(R.games[seat]?R.games[seat].lines:0)+(R.games[o]?R.games[o].lines:R.remoteLines||0);
+    var lv=sharedLevel(lines,ts-m.t0);
+    if(m.lv&&lv>m.lv){R.games.forEach(function(g){levelUp(g,lv);}); SFX.play('level');}
+    m.lv=lv; R.games.forEach(function(g){if(g)g.levelOverride=lv;});
+  }
   for(var i=0;i<2;i++){
     var g=R.games[i]; if(!g)continue;
     if(g.over&&g.koUntil&&ts>=g.koUntil)g.revive();
@@ -568,13 +663,14 @@ function refTick(ts){
 function guestSync(o){
   var s=o.s, mine=!!(s.seats&&s.seats.indexOf(seat)>=0&&!s.solo&&!s.cpu), live=s.phase==='countdown'||s.phase==='playing';
   if(mine&&live&&s.coop){
-    var t=performance.now();
+    var t=gameNow();
     if(!G||G.seed!==o.seed){G={coop:true,seed:o.seed,t0:t+(+o.cd||0),tEnd:Infinity,lastBeep:0,went:false,snap:null}; layoutLocal();}
     if(s.phase==='countdown')G.t0=t+(+o.cd||0);
+    G.tEnd=o.tl>=0?t+o.tl:Infinity;
     return;
   }
   if(mine&&live){
-    var now=performance.now();
+    var now=gameNow();
     if(!G||G.seed!==o.seed){
       var g=new Game(o.seed,{powers:!!s.powers});
       g.pal=packPal(myPack);
@@ -583,13 +679,13 @@ function guestSync(o){
       opp=null;
       g.sfx=function(n,a){SFX.play(n,0,a);};
       g.onSend=function(n){relay({k:'atk',n:n});};
-      g.onOver=function(){relay({k:'ko'}); if(hostS&&hostS.rules==='ko')g.koUntil=performance.now()+KO_RESPAWN_MS;};
+      g.onOver=function(){relay({k:'ko'}); if(hostS&&hostS.rules==='ko')g.koUntil=gameNow()+KO_RESPAWN_MS;};
     }
     if(s.phase==='countdown')G.t0=now+(+o.cd||0);
     G.tEnd=o.tl>=0?now+o.tl:Infinity;
   }else if(G&&!live){
     if(G.game)G.game.over=true; G=null;
-    SFX.play(s.winner===seat?'win':'lose');
+    if(s.phase==='result')SFX.play(s.coop&&s.coop.cpu?(s.winner===0?'win':'lose'):s.winner===seat?'win':'lose');
   }
 }
 function guestTick(ts){
@@ -604,7 +700,10 @@ function guestTick(ts){
 /* messages between the two phones */
 function onPeer(from,o){
   if(!o||typeof o!=='object'||!phoneMode())return;
-  if(o.k==='state'&&seat===1&&o.s&&typeof o.s==='object'){hostS=o.s; guestSync(o); render();}
+  if(o.k==='state'&&seat===1&&o.s&&typeof o.s==='object'){
+    hostS=o.s; if(o.s.paused)pauseClock(); else resumeClock();
+    guestSync(o); render();
+  }
   else if(o.k==='hello'&&seat===0)push();
   else if(o.k==='pad'&&seat===0&&o.o&&typeof o.o==='object')refPad(from,o.o);
   else if(o.k==='atk'){var g=myGame()||viewGame(); if(g&&!g.over)g.receive(Math.max(0,Math.min(GARBAGE_CAP,o.n|0)));}
@@ -615,7 +714,14 @@ function onPeer(from,o){
     (Array.isArray(o.ev)?o.ev:[]).forEach(function(n){if(n==='clear')SFX.play('clear',0,1);});
   }
   else if(o.k==='pow'&&typeof o.p==='string'&&POWERS[o.p]){var hg=myGame()||viewGame(); if(hg&&!hg.over)hg.hit(o.p);}
-  else if(o.k==='snap'){opp=o; if(seat===0&&R.match&&R.match.remote===from)R.remoteSent=o.sent|0;}
+  else if(o.k==='snap'){
+    opp=o;
+    if(seat===0&&R.match&&R.match.remote===from){R.remoteSent=o.sent|0;R.remoteLines=o.lines|0;}
+    if(G&&G.game&&o.lv>0){                         /* player 1's phone sets the shared level */
+      if(G.lv&&o.lv>G.lv){levelUp(G.game,o.lv);SFX.play('level');}
+      G.lv=o.lv; G.game.levelOverride=o.lv;
+    }
+  }
 }
 function onRoom(m){
   var wasScreen=room.screen, wasPeer=peerOn();
@@ -630,7 +736,7 @@ function onRoom(m){
     if(seat===0){
       if(!peer)R.ready[1]=false;
       var m2=R.match, pvpLive=m2&&m2.remote!=null&&localLive();
-      if(pvpLive&&!peer&&!R.forfeit)R.forfeit=setTimeout(function(){R.forfeit=0;if(localLive()&&!peerOn())refFinish(seat);},FORFEIT_MS);
+      if(pvpLive&&!peer&&!R.forfeit)R.forfeit=setTimeout(function(){R.forfeit=0;if(localLive()&&!peerOn())refFinish(R.match&&R.match.vsCpu?1:seat);},FORFEIT_MS);
       else if(peer&&R.forfeit){clearTimeout(R.forfeit);R.forfeit=0;}
       if(fresh){push();return;}
     }
@@ -641,15 +747,19 @@ function onRoom(m){
 /* the board view */
 var cvMy=$('#myBoard'), cvHold=$('#myHold'), cvNext=$('#myNext'), cvOpp=$('#oppBoard'), lcs=20, lns=11, ocs=8, hudTxt='';
 function clearFlip(){syncFlip($('#myFlip'),null);}
+function coopVs(){return !!((G&&G.coop&&hostS&&hostS.coop&&hostS.coop.cpu)||(R.match&&R.match.coop&&R.co2));}
 function coopShown(){return !!((G&&G.coop)||(R.match&&R.match.coop&&R.co));}
 function layoutLocal(){
   var r=surf.getBoundingClientRect(); if(!r.width)return;
-  $('#local').classList.toggle('coop',coopShown());
-  if(coopShown()){                                  /* wide board below a strip with hold, next and the line count */
+  var vs=coopVs();
+  $('#local').classList.toggle('coop',coopShown()); $('#local').classList.toggle('vs',vs);
+  if(coopShown()){                                  /* wide board below a strip with hold, next, the line count (and the computer team's board) */
     lns=Math.max(8,Math.min(14,Math.floor(r.width/28)));
-    lcs=Math.max(8,Math.floor(Math.min((r.height-16-lns*3-18)/ROWS,(r.width-16)/COOP_COLS)));
+    var strip=vs?Math.max(lns*3,ROWS*3+14):lns*3;
+    lcs=Math.max(8,Math.floor(Math.min((r.height-16-strip-18)/ROWS,(r.width-16)/COOP_COLS)));
     setCanvas(cvMy,COOP_COLS*lcs,ROWS*lcs);
     setCanvas(cvHold,lns*5,lns*3); setCanvas(cvNext,lns*5,lns*3);
+    if(vs){ocs=3; setCanvas(cvOpp,COOP_COLS*ocs,ROWS*ocs);}
     return;
   }
   var railW=84, W=r.width-16-railW-10, H=r.height-16;
@@ -663,7 +773,7 @@ function snapOf(g){
   var grid=g.board.map(function(row){return row.slice();}), cur=g.cur, r, c, b='';
   if(cur&&!g.over)for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++)if(cur.m[r][c]&&cur.y+r>=0)grid[cur.y+r][cur.x+c]=IDS[cur.t];
   for(r=0;r<ROWS;r++)b+=grid[r].map(function(v){return v.toString(36);}).join('');
-  return {k:'snap',b:b,p:g.pending,a:g.armed(),sent:g.sent,ko:!!(g.over&&g.koUntil),pk:myPack};
+  return {k:'snap',b:b,p:g.pending,a:g.armed(),sent:g.sent,lines:g.lines,lv:seat===0&&R.match?R.match.lv|0:0,ko:!!(g.over&&g.koUntil),pk:myPack};
 }
 function snapView(o){
   var board=[], r, c;
@@ -682,19 +792,33 @@ function coopFromSnap(o){
   return {board:board,over:false,p:[lane(cs2[0]),lane(cs2[1])]};
 }
 function drawCoopLocal(ts){
-  clearFlip();
-  var view, mine, lines, level, t0;
+  var view, mine, lines, level, t0, tEnd=Infinity, flipped=false, ko=false;
   if(G&&G.coop){
     t0=G.t0;
     if(!G.snap){drawEmptyBoard(cvMy);view=null;}
     else{view=coopFromSnap(G.snap); var q=Array.isArray(G.snap.q)?G.snap.q.filter(function(t){return SHAPES[t];}):[];
-      mine={queue:q,held:SHAPES[G.snap.h]?G.snap.h:null,canHold:!!G.snap.ch}; lines=G.snap.ln|0; level=G.snap.lv|0;}
-  }else{view=R.co; mine=R.co.p[seat]; lines=R.co.lines; level=R.co.level; t0=R.match.t0;}
-  if(view){drawCoop(cvMy,view,lcs); drawHold(cvHold,mine,lns); drawNext(cvNext,mine,lns,1);}
+      mine={queue:q,held:SHAPES[G.snap.h]?G.snap.h:null,canHold:!!G.snap.ch}; lines=G.snap.ln|0; level=G.snap.lv|0; flipped=!!G.snap.fl; ko=!!G.snap.ko;}
+    tEnd=G.tEnd;
+  }else{view=R.co; mine=R.co.p[seat]; lines=R.co.lines; level=R.co.level; t0=R.match.t0; tEnd=R.match.tEnd; flipped=R.co.fxOn('flip'); ko=!!(R.co.over&&R.co.koUntil);}
+  $('#myFlip').classList.toggle('flipped',flipped);
+  if(view){drawCoop(cvMy,view,lcs); if(ko)drawKO(cvMy,lcs); drawHold(cvHold,mine,lns); drawNext(cvNext,mine,lns,1);}
+  if(coopVs()){                                   /* the computer team's board, small, in the strip */
+    $('#oppName').textContent='CPU';
+    if(R.co2&&!G)drawCoop(cvOpp,R.co2,ocs);
+    else if(G&&G.snap&&typeof G.snap.ob==='string'&&G.snap.ob.length===ROWS*COOP_COLS){
+      var ob=[],rr,cc; for(rr=0;rr<ROWS;rr++){var row=[];for(cc=0;cc<COOP_COLS;cc++){var v=parseInt(G.snap.ob.charAt(rr*COOP_COLS+cc),36)||0;row.push(v>15?0:v);}ob.push(row);}
+      drawCoop(cvOpp,{board:ob,over:true,p:[{},{}]},ocs);
+    }else drawEmptyBoard(cvOpp);
+  }
   $('#myLines').textContent=lines||0; $('#statB').textContent='Level'; $('#mySent').textContent=level||1;
   var left=t0-ts, cd=$('#cdNum'); cd.hidden=left<=0; if(left>0)cd.textContent=Math.ceil(left/1000);
-  var txt='Co-op';
-  if(txt!==hudTxt){hudTxt=txt;$('#hud').innerHTML='<span>Co-op</span>';}
+  var kos=S.kos, txt='Lv '+(level||1);
+  if(kos)txt+='|KO '+kos[0]+'–'+kos[1];
+  if(tEnd<Infinity){var rem=tEnd-Math.max(ts,t0), sec=Math.max(0,Math.ceil(rem/1000));txt+='|'+(rem<=30000?'!':'')+Math.floor(sec/60)+':'+('0'+sec%60).slice(-2);}
+  if(txt!==hudTxt){
+    hudTxt=txt;
+    $('#hud').innerHTML=txt.split('|').map(function(x){return x.charAt(0)==='!'?'<span class="low">'+x.slice(1)+'</span>':'<span>'+x+'</span>';}).join('');
+  }
 }
 function drawLocal(ts){
   if(coopShown()){drawCoopLocal(ts);return;}
@@ -716,19 +840,22 @@ function drawLocal(ts){
   var t0=G?G.t0:(m?m.t0:0), left=t0-ts, cd=$('#cdNum');
   cd.hidden=left<=0; if(left>0)cd.textContent=Math.ceil(left/1000);
   var tEnd=G?G.tEnd:(m?m.tEnd:Infinity), kos=S.kos, txt='';
-  if(kos)txt+='KO '+kos[seat]+'–'+kos[seat===0?1:0];
+  txt+='Lv '+g.level;
+  if(kos)txt+='|KO '+kos[seat]+'–'+kos[seat===0?1:0];
   if(tEnd<Infinity){var rem=Math.min(tEnd-ts,tEnd-Math.max(ts,t0)), sec=Math.max(0,Math.ceil(rem/1000));txt+=(txt?'|':'')+(rem<=30000?'!':'')+Math.floor(sec/60)+':'+('0'+sec%60).slice(-2);}
   if(txt!==hudTxt){
     hudTxt=txt;
     $('#hud').innerHTML=txt.split('|').map(function(x){return x.charAt(0)==='!'?'<span class="low">'+x.slice(1)+'</span>':'<span>'+x+'</span>';}).join('');
   }
 }
-function loop(ts){
+function loop(){
+  var ts=gameNow(), still=clockPaused();
   if(phoneMode()){
-    if(R.match)refTick(ts);
-    if(G)guestTick(ts);
+    if(R.match&&!still)refTick(ts);
+    if(G&&!still)guestTick(ts);
     if(!$('#local').hidden)drawLocal(ts);
-    if(R.match&&R.match.coop&&R.co&&seat===0&&peerOn()&&(R.phase==='playing'||R.phase==='countdown')){
+    if(still){}
+    else if(R.match&&R.match.coop&&R.co&&seat===0&&peerOn()&&(R.phase==='playing'||R.phase==='countdown')){
       if(ts-snapAt>=33){snapAt=ts;relay(coSnap());}
     }else{
       var mine=G?G.game:(R.match&&R.match.remote!=null&&R.phase==='playing'?R.games[seat]:null);

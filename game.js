@@ -1,6 +1,12 @@
 /* Block Duel shared code: rules and pacing, the board engine (Game), the computer player (Bot), sound effects (SFX) and canvas drawing.
    Loaded as a plain script by both the TV page (tv.html) and the phone page (play.html), so everything here is a global. */
 'use strict';
+/* The game clock. Pausing stops it, so gravity, lock delay, garbage delay, effects, KO respawns and the match clock all freeze. */
+var CLOCK={off:0,at:null};
+function gameNow(){return (CLOCK.at!==null?CLOCK.at:performance.now())-CLOCK.off;}
+function pauseClock(){if(CLOCK.at===null)CLOCK.at=performance.now();}
+function resumeClock(){if(CLOCK.at!==null){CLOCK.off+=performance.now()-CLOCK.at;CLOCK.at=null;}}
+function clockPaused(){return CLOCK.at!==null;}
 var COLS=10, ROWS=20, LOCK_MS=500, COUNTDOWN=3000, FORFEIT_MS=10000;
 /* Pacing knobs. Garbage sent by lines cleared (index = lines): a single sends nothing, a double 1, a triple 1, a Tetris 3.
    Incoming garbage lands at most GARBAGE_PER_LOCK rows at a time, the queue is capped at GARBAGE_CAP, and speed rises slowly.
@@ -9,6 +15,8 @@ var COLS=10, ROWS=20, LOCK_MS=500, COUNTDOWN=3000, FORFEIT_MS=10000;
    First to KO_TO_WIN wins; when the match time runs out, most KOs wins, then most garbage sent, otherwise it is a draw.
    The match time is picked on the phones from KO_MINUTES (0 means no time limit). */
 var KO_TO_WIN=3, KO_MINUTES=[2,3,5,0], KO_RESPAWN_MS=1600;
+/* Versus players share one level: it rises with both players' lines together (twice LEVEL_EVERY_LINES per level) and with match time. */
+function sharedLevel(lines,elapsed){return 1+Math.floor(lines/(LEVEL_EVERY_LINES*2))+Math.floor(Math.max(0,elapsed)/LEVEL_EVERY_MS);}
 var GARBAGE_TABLE=[0,0,1,1,3], GARBAGE_PER_LOCK=4, GARBAGE_CAP=10, GARBAGE_DELAY_MS=1500, LEVEL_EVERY_LINES=8, LEVEL_EVERY_MS=90000, GRAVITY_START=800, GRAVITY_STEP=55, GRAVITY_MIN=100;
 var css=getComputedStyle(document.documentElement);
 function tok(n,fallback){return css.getPropertyValue(n).trim()||fallback||'';}
@@ -20,7 +28,14 @@ var C_BOARD=tok('--board','#0b0f14'), C_GRID=tok('--gridline','#18202a'), C_DANG
    cleared, so the player picks the moment; the piece's other blocks then go grey. Both players get them on the same pieces of their
    (identical) sequence, at least POWER_GAP pieces apart. Self powers help you; the others hit the opponent for dur ms unless their
    Shield is up. Fill lines the gaps of up to FILL_ROWS rows of your stack up into one open column; its new blocks are CELL_FILLED. */
-var POWER_GAP=5, POWER_CHANCE=0.16, FILL_ROWS=8, CELL_FILLED=15, CELL_SPENT=8;
+/* While a power piece falls it steps through the powers, POWER_STEP_MS each, from a random start; it settles on whichever power is
+   showing when it locks, so a well-timed drop picks the power. */
+var POWER_GAP=5, POWER_CHANCE=0.16, POWER_STEP_MS=700, FILL_ROWS=8, CELL_FILLED=15, CELL_SPENT=8;
+/* which power a falling power piece shows at time t, and how far through that step it is (0..1) */
+function powerAt(cur,t){
+  var e=Math.max(0,t-cur.spT0), k=Math.floor(e/POWER_STEP_MS), n=POWER_KEYS.length;
+  return {p:POWER_KEYS[(cur.spOff+k)%n],next:POWER_KEYS[(cur.spOff+k+1)%n],f:(e%POWER_STEP_MS)/POWER_STEP_MS};
+}
 var POWERS={
   fill:  {id:9,  name:'Fill',   icon:'\u2726', col:'#ffd34d', deep:'#a8740a', self:true,  note:'lines the gaps in your stack up into one column'},
   flip:  {id:10, name:'Flip',   icon:'\u21c5', col:'#ff4f6a', deep:'#9c1030', dur:8000,  hit:'Flipped', note:'turns the other board upside down'},
@@ -103,7 +118,8 @@ Game.prototype.spawn=function(forced,forcedSp){
   if(!t){this.refill(); t=this.queue.shift(); sp=!!this.qsp.shift(); this.refill();}
   var m=SHAPES[t].map(function(r){return r.slice();});
   this.cur={t:t,m:m,x:this.spawnAt+Math.floor((this.spawnW-m.length)/2),y:t==='I'?-1:0,sp:sp};
-  this.groundAt=null; this.resets=0; this.lastFall=performance.now();
+  if(sp){this.cur.spT0=gameNow(); this.cur.spOff=Math.floor(this.prng()*POWER_KEYS.length);}
+  this.groundAt=null; this.resets=0; this.lastFall=gameNow();
   return !this.collide(this.cur.m,this.cur.x,this.cur.y);
 };
 Game.prototype.touchReset=function(){if(this.groundAt!=null&&this.resets<12){this.groundAt=null;this.resets++;}};
@@ -116,7 +132,7 @@ Game.prototype.hold=function(){
   this.canHold=false; this.sfx('hold');
   if(!ok)this.die();
 };
-Game.prototype.soft=function(){if(this.over)return;var c=this.cur;if(!this.collide(c.m,c.x,c.y+1)){c.y++;this.lastFall=performance.now();}};
+Game.prototype.soft=function(){if(this.over)return;var c=this.cur;if(!this.collide(c.m,c.x,c.y+1)){c.y++;this.lastFall=gameNow();}};
 Game.prototype.rotate=function(dir){
   if(this.over)return;
   var c=this.cur; if(c.t==='O')return;
@@ -130,22 +146,21 @@ Game.prototype.hard=function(){
   if(this.over)return;
   var c=this.cur, y0=c.y;
   while(!this.collide(c.m,c.x,c.y+1))c.y++;
-  this.fx={t:performance.now(),col:PAL[IDS[c.t]],m:c.m,x:c.x,y0:y0,y1:c.y};
-  this.thud=performance.now();
+  this.fx={t:gameNow(),col:PAL[IDS[c.t]],m:c.m,x:c.x,y0:y0,y1:c.y};
   this.sfx('hard',c.y-y0);
   this.lock();
 };
 Game.prototype.receive=function(n){
   if(this.fxOn('shield'))return;                 /* the shield swallows garbage */
   n=Math.min(n,GARBAGE_CAP-this.pending); if(n<=0)return;
-  this.incoming.push({n:n,t:performance.now()}); this.pending+=n;
+  this.incoming.push({n:n,t:gameNow()}); this.pending+=n;
 };
 Game.prototype.cancel=function(n){        /* oldest garbage goes first; returns what is left over */
   while(n>0&&this.incoming.length){var e=this.incoming[0], k=Math.min(n,e.n); e.n-=k; n-=k; this.pending-=k; if(!e.n)this.incoming.shift();}
   return n;
 };
 Game.prototype.armed=function(){          /* rows whose delay has run out */
-  var now=performance.now(), a=0;
+  var now=gameNow(), a=0;
   this.incoming.forEach(function(e){if(now-e.t>=GARBAGE_DELAY_MS)a+=e.n;});
   return a;
 };
@@ -174,7 +189,7 @@ Game.prototype.clearFull=function(){
 };
 Game.prototype.lock=function(){
   var c=this.cur, topOut=false, r, cc;
-  var pw=c.sp?POWER_KEYS[Math.floor(this.prng()*POWER_KEYS.length)]:null, val=pw?POWERS[pw].id:IDS[c.t];
+  var pw=c.sp?powerAt(c,gameNow()).p:null, val=pw?POWERS[pw].id:IDS[c.t];
   for(r=0;r<c.m.length;r++)for(cc=0;cc<c.m[r].length;cc++){
     if(!c.m[r][cc])continue;
     var y=c.y+r;
@@ -182,7 +197,7 @@ Game.prototype.lock=function(){
     this.board[y][c.x+cc]=val;
   }
   if(topOut){this.die();return;}
-  if(pw){this.burst={t:performance.now(),p:pw,x:c.x+c.m.length/2,y:c.y+c.m.length/2}; this.banner={p:pw,t:performance.now(),mode:'armed'}; this.sfx('arm',pw);}
+  if(pw){this.burst={t:gameNow(),p:pw,x:c.x+c.m.length/2,y:c.y+c.m.length/2}; this.banner={p:pw,t:gameNow(),mode:'armed'}; this.sfx('arm',pw);}
   this.fired=[];
   var n=this.clearFull();
   if(n)this.lines+=n;
@@ -207,7 +222,7 @@ Game.prototype.lock=function(){
 };
 /* a power goes off (its line was cleared): self powers act here, the rest go to the opponent through onPower. Returns extra lines cleared. */
 Game.prototype.usePower=function(pw){
-  var P=POWERS[pw], now=performance.now(), extra=0, r, c;
+  var P=POWERS[pw], now=gameNow(), extra=0, r, c;
   this.banner={p:pw,t:now,mode:P.self?'self':'send'};
   this.sfx('power',pw);
   if(pw==='fill'){
@@ -237,13 +252,13 @@ Game.prototype.usePower=function(pw){
 /* an attack from the other player; returns false when the shield blocked it */
 Game.prototype.hit=function(pw){
   var P=POWERS[pw]; if(!P||P.self||this.over)return false;
-  var now=performance.now();
+  var now=gameNow();
   if(this.fxOn('shield')){this.banner={p:'shield',t:now,mode:'block'};this.sfx('block');return false;}
   this.effects[pw]=now+P.dur; this.banner={p:pw,t:now,mode:'hit'}; this.hits++; this.lastHit=pw;
   this.sfx('zap',pw);
   return true;
 };
-Game.prototype.fxOn=function(k){return (this.effects[k]||0)>performance.now();};
+Game.prototype.fxOn=function(k){return (this.effects[k]||0)>gameNow();};
 Game.prototype.revive=function(){
   for(var r=0;r<ROWS;r++)this.board[r].fill(0);
   this.effects={};
@@ -283,26 +298,55 @@ Game.prototype.tick=function(ts,t0){
 /* Co-op: both players drop pieces into one COOP_COLS-wide board and clear lines together. Each player is a Game lane that shares
    the board, so moving, rotating, holding and locking work as in versus. Falling pieces pass through each other and only meet the
    board; when one locks where the other is falling, the other is lifted clear. Each lane spawns over its own half of the board.
-   Speed rises with lines and time; the run ends when the stack tops out. */
+   Speed rises with lines and time; the run ends when the stack tops out.
+   Co-op against the computer pits two of these boards against each other as teams: lines send garbage to the other team (it goes
+   to whichever lane has less waiting), power pieces work as in versus (an attack hits both lanes; a Shield covers both), and with KO
+   rules a topped-out team board is cleared and the other team scores a KO. o (optional): powers. */
 var COOP_COLS=16, COOP_LEVEL_LINES=12;
-function CoopGame(seed){
-  var co=this, r;
+function CoopGame(seed,o){
+  var co=this, r; o=o||{};
   this.board=[]; for(r=0;r<ROWS;r++)this.board.push(new Array(COOP_COLS).fill(0));
-  this.lines=0; this.level=1; this.over=false; this.onOver=function(){}; this.sfx=function(){};
+  this.lines=0; this.level=1; this.levelOverride=0; this.over=false; this.koUntil=0; this.pal=null; this.notice=null;
+  this.onOver=function(){}; this.sfx=function(){}; this.onSend=function(){}; this.onPower=function(){};
   this.p=[0,1].map(function(i){
-    var half=COOP_COLS/2, g=new Game(seed+i,{cols:COOP_COLS,shared:co,spawnAt:i*half,spawnW:half});
+    var half=COOP_COLS/2, g=new Game(seed+i,{cols:COOP_COLS,shared:co,spawnAt:i*half,spawnW:half,powers:!!o.powers});
     g.seat=i;
     g.sfx=function(n,a){co.sfx(i,n,a);};
     g.onLock=function(n){co.locked(i,n);};
     g.onOver=function(){co.die();};
+    g.onSend=function(n){co.onSend(n);};
+    g.onPower=function(pw){co.onPower(pw);};
+    var rise=g.addGarbage;
+    g.addGarbage=function(k){var out=rise.call(g,k); co.lift(1-i); return out;};
+    var use=g.usePower;
+    g.usePower=function(pw){                        /* a Shield covers the whole team */
+      var x=use.call(g,pw);
+      if(pw==='shield'){var t=co.p[1-i]; t.effects.shield=g.effects.shield; t.incoming=[]; t.pending=0;}
+      return x;
+    };
     return g;
   });
 }
+CoopGame.prototype.receive=function(n){var a=this.p[0], b=this.p[1]; (a.pending<=b.pending?a:b).receive(n);};
+CoopGame.prototype.hit=function(pw){var ok=false; this.p.forEach(function(g){if(g.hit(pw))ok=true;}); return ok;};
+CoopGame.prototype.fxOn=function(k){return this.p.some(function(g){return g.fxOn(k);});};
+CoopGame.prototype.pendingAll=function(){return this.p[0].pending+this.p[1].pending;};
+CoopGame.prototype.armedAll=function(){return this.p[0].armed()+this.p[1].armed();};
+CoopGame.prototype.sentAll=function(){return this.p[0].sent+this.p[1].sent;};
+CoopGame.prototype.revive=function(){              /* KO: clear the board and start both lanes again */
+  for(var r=0;r<ROWS;r++)this.board[r].fill(0);
+  this.over=false; this.koUntil=0;
+  this.p.forEach(function(g){g.revive();});
+};
 CoopGame.prototype.locked=function(i,n){
   var co=this;
   if(n){this.lines+=n;}
   this.p.forEach(function(g){g.lines=co.lines;});
-  var o=this.p[1-i], c=o.cur;                       /* the piece just placed (or rows shifting down) may cover the other falling piece: lift it clear */
+  this.lift(1-i);
+};
+/* the board changed under lane i's falling piece (a piece placed over it, rows shifting, garbage rising): lift it clear */
+CoopGame.prototype.lift=function(i){
+  var o=this.p[i], c=o.cur;
   if(!c||o.over)return;
   while(collideOn(this.board,c.m,c.x,c.y)&&c.y>-4)c.y--;
   if(collideOn(this.board,c.m,c.x,c.y))this.die();
@@ -318,7 +362,7 @@ CoopGame.prototype.apply=function(i,k){
 };
 CoopGame.prototype.tick=function(ts,t0){
   if(this.over)return;
-  this.level=1+Math.floor(this.lines/COOP_LEVEL_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS);
+  this.level=this.levelOverride||(1+Math.floor(this.lines/COOP_LEVEL_LINES)+Math.floor((ts-t0)/LEVEL_EVERY_MS));
   for(var i=0;i<2;i++){
     if(this.over)return;
     var g=this.p[i];
@@ -340,13 +384,13 @@ var CPU={
 var CPU_NAME={easy:'Easy',normal:'Normal',hard:'Hard'};
 /* Board score: El-Tetris weights (landing height, rows cleared, row and column transitions, holes, wells). */
 function evalBoard(b,n,land,greed){
-  var rowT=0, colT=0, holes=0, wells=0, max=0, r, c;
+  var W=b[0].length, rowT=0, colT=0, holes=0, wells=0, max=0, r, c;
   for(r=0;r<ROWS;r++){
     var prev=1;
-    for(c=0;c<COLS;c++){var f=b[r][c]?1:0; if(f!==prev)rowT++; prev=f;}
+    for(c=0;c<W;c++){var f=b[r][c]?1:0; if(f!==prev)rowT++; prev=f;}
     if(!prev)rowT++;
   }
-  for(c=0;c<COLS;c++){
+  for(c=0;c<W;c++){
     var above=0, seen=false;
     for(r=0;r<ROWS;r++){
       var v=b[r][c]?1:0;
@@ -358,17 +402,17 @@ function evalBoard(b,n,land,greed){
     if(!above)colT++;
   }
   var well=greed>0&&max+n<=9;               /* stack is low: keep the right-hand column open and hold out for multi-line clears */
-  for(c=0;c<COLS;c++){
-    if(well&&c===COLS-1)continue;
+  for(c=0;c<W;c++){
+    if(well&&c===W-1)continue;
     var depth=0;
     for(r=0;r<ROWS;r++){
-      var l=c===0||b[r][c-1], rt=c===COLS-1||b[r][c+1];
+      var l=c===0||b[r][c-1], rt=c===W-1||b[r][c+1];
       if(!b[r][c]&&l&&rt){depth++; wells+=depth;}else if(b[r][c])break;else depth=0;
     }
   }
   var s=-4.5*land+3.42*n-3.22*rowT-9.35*colT-7.9*holes-3.39*wells;
   if(well){
-    var h9=0; for(r=0;r<ROWS;r++)if(b[r][COLS-1]){h9=ROWS-r;break;}
+    var h9=0; for(r=0;r<ROWS;r++)if(b[r][W-1]){h9=ROWS-r;break;}
     s+=greed*([0,-14,-10,4,40][n]-6*h9);
   }
   return s;
@@ -378,13 +422,13 @@ function placements(board,t,greed){
   for(var k=0;k<spins;k++){
     var top=0; while(!m[top].some(function(v){return v;}))top++;
     var bot=m.length-1; while(!m[bot].some(function(v){return v;}))bot--;
-    for(var x=-2;x<COLS;x++){
+    for(var x=-2;x<board[0].length;x++){
       if(collideOn(board,m,x,0))continue;
       var y=0; while(!collideOn(board,m,x,y+1))y++;
       var b=board.map(function(row){return row.slice();}), r, c;
       for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c])b[y+r][x+c]=1;
       var kept=b.filter(function(row){return !row.every(function(v){return v;});}), n=ROWS-kept.length;
-      while(kept.length<ROWS)kept.unshift(new Array(COLS).fill(0));
+      while(kept.length<ROWS)kept.unshift(new Array(board[0].length).fill(0));
       out.push({m:m,x:x,s:evalBoard(kept,n,ROWS-(y+(top+bot)/2),greed)});
     }
     m=rot(m);
@@ -392,9 +436,13 @@ function placements(board,t,greed){
   return out;
 }
 function sameMat(a,b){return a.length===b.length&&a.every(function(row,r){return row.every(function(v,c){return v===b[r][c];});});}
-function Bot(g,level){this.g=g;this.cfg=CPU[level];this.piece=null;this.plan=null;this.next=0;}
+function Bot(g,level){this.g=g;this.cfg=CPU[level];this.zone=g.seat!=null&&g.cols===COOP_COLS?[g.seat*COOP_COLS/2,g.seat*COOP_COLS/2+COOP_COLS/2-1]:null;this.piece=null;this.plan=null;this.next=0;}
 Bot.prototype.pick=function(t){
   var list=placements(this.g.board,t,this.cfg.greed); if(!list.length)return null;
+  if(this.zone){                                  /* co-op lanes: keep to this lane's half when there is a spot there */
+    var z=this.zone, inZone=list.filter(function(o){var w=0;o.m.forEach(function(row){row.forEach(function(v,c){if(v)w=Math.max(w,c);});});return o.x>=z[0]-1&&o.x+w<=z[1]+1;});
+    if(inZone.length)list=inZone;
+  }
   list.sort(function(a,b){return b.s-a.s;});
   if(this.cfg.slip&&Math.random()<this.cfg.slip)return list[Math.floor(Math.random()*Math.min(4,list.length))];
   return list[0];
@@ -504,6 +552,7 @@ var SFX=(function(){
       case 'ko': tone(420,70,0.5,'sawtooth',0.18,pan); noise(0.35,0.22,pan,1200); break;
       case 'power': [784,988,1175,1568].forEach(function(f,i){tone(f,f*1.01,0.12,'triangle',0.13,pan,i*0.045);}); noise(0.2,0.06,pan,9000,0.12); break;
       case 'arm': [988,1319].forEach(function(f,i){tone(f,f,0.09,'triangle',0.08,pan,i*0.05);}); break;
+      case 'level': [NOTE.c5,NOTE.g5,NOTE.c6].forEach(function(f,i){tone(f,f,0.14,'square',0.07,0,i*0.08);}); tone(NOTE.c6*1.5,NOTE.c6*1.5,0.3,'triangle',0.1,0,0.24); break;
       case 'zap': tone(1400,180,0.35,'sawtooth',0.12,pan); tone(700,90,0.35,'square',0.06,pan,0.03); noise(0.15,0.12,pan,4000); break;
       case 'block': tone(1320,1320,0.25,'sine',0.16,pan); tone(1980,1980,0.2,'sine',0.08,pan,0.03); break;
       case 'lose': [NOTE.e4,NOTE.c4].forEach(function(f,i){tone(f*1.2,f*0.9,0.3,'sawtooth',0.12,0,i*0.22);}); break;
@@ -555,9 +604,9 @@ function powerCell(ctx,x,y,s,P,t){
   ctx.beginPath(); ctx.moveTo(x+band,y); ctx.lineTo(x+band+s*0.35,y); ctx.lineTo(x+band+s*0.35-s,y+s); ctx.lineTo(x+band-s,y+s); ctx.fill();
   ctx.restore();
 }
-/* a cell of a falling power piece: shifting colour, glow and a glint */
-function shimmerCell(ctx,x,y,s,t,k){
-  var col=shimmerCol(t,k*0.35);
+/* a cell of a falling power piece: glow and a glint; col defaults to a colour gliding through all the powers */
+function shimmerCell(ctx,x,y,s,t,k,col){
+  col=col||shimmerCol(t,k*0.35);
   ctx.save(); ctx.shadowColor=col; ctx.shadowBlur=s*0.7;
   cell(ctx,x,y,s,col);
   ctx.restore();
@@ -576,7 +625,7 @@ function drawGrid(cv,cols,cs){
   ctx.stroke();
 }
 function drawCells(ctx,board,cs,pal){
-  var t=performance.now(); pal=pal||PAL;
+  var t=gameNow(); pal=pal||PAL;
   for(var r=0;r<ROWS;r++)for(var c=0;c<board[r].length;c++){
     var v=board[r][c]; if(!v)continue;
     if(v>=9&&POWER_BY_ID[v])powerCell(ctx,c*cs,r*cs,cs,POWERS[POWER_BY_ID[v]],t);
@@ -586,7 +635,11 @@ function drawCells(ctx,board,cs,pal){
 }
 /* the falling piece and its ghost; mark, if given, outlines the piece in a player's colour (co-op) */
 function drawPiece(ctx,g,cur,cs,mark,pal){
-  var r, c, t=performance.now(), col=cur.sp?shimmerCol(t):(pal||PAL)[IDS[cur.t]], gy=cur.y, k=0;
+  var r, c, t=gameNow(), now=cur.sp&&cur.spT0!=null?powerAt(cur,t):null, col, gy=cur.y, k=0;
+  if(now){                                         /* the power it would settle on now, fading into the next just before it changes */
+    var a=POWERS[now.p].col, b=POWERS[now.next].col;
+    col=now.f>0.82?mixCol(a,b,(now.f-0.82)/0.18):a;
+  }else col=cur.sp?shimmerCol(t):(pal||PAL)[IDS[cur.t]];
   while(!g.collide(cur.m,cur.x,gy+1))gy++;
   ctx.strokeStyle=mark||col; ctx.globalAlpha=0.55; ctx.lineWidth=2;
   for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
@@ -595,16 +648,47 @@ function drawPiece(ctx,g,cur,cs,mark,pal){
   ctx.globalAlpha=1;
   for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++){
     if(!cur.m[r][c]||cur.y+r<0)continue;
-    if(cur.sp)shimmerCell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,t,k++);
+    if(cur.sp)shimmerCell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,t,k++,now?col:null);
     else cell(ctx,(cur.x+c)*cs,(cur.y+r)*cs,cs,col);
     if(mark){ctx.strokeStyle=mark;ctx.lineWidth=2;ctx.strokeRect((cur.x+c)*cs+1,(cur.y+r)*cs+1,cs-2,cs-2);}
   }
+  if(now)drawPowerTag(ctx,cur,cs,now);
 }
-function drawFx(ctx,g,cs){                       /* hard-drop streak */
+/* the tag riding on a falling power piece: what it would give now, what comes next, and a bar running down to the switch */
+function drawPowerTag(ctx,cur,cs,now){
+  var r, c, top=9, bot=-1, minC=9, maxC=-1;
+  for(r=0;r<cur.m.length;r++)for(c=0;c<cur.m[r].length;c++)if(cur.m[r][c]){top=Math.min(top,r);bot=Math.max(bot,r);minC=Math.min(minC,c);maxC=Math.max(maxC,c);}
+  var P=POWERS[now.p], N=POWERS[now.next], h=Math.max(16,Math.round(cs*0.85)), font=Math.round(h*0.6);
+  ctx.save();
+  ctx.font='800 '+font+'px '+tok('--font-mono','monospace');
+  var label=P.icon+' '+P.name.toUpperCase(), w=ctx.measureText(label).width+h*1.6;
+  var cx=(cur.x+(minC+maxC+1)/2)*cs, y=(cur.y+top)*cs-h-5;
+  if(y<2)y=(cur.y+bot+1)*cs+5;                     /* no room above: hang it below the piece */
+  var x=Math.max(2,Math.min((ctx.canvas._w||ctx.canvas.width)-w-2,cx-w/2));
+  ctx.globalAlpha=0.94; ctx.fillStyle='rgba(10,13,18,.88)'; ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=P.col; ctx.lineWidth=1.5; ctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+  ctx.fillStyle=P.col; ctx.fillRect(x,y+h-3,w*(1-now.f),3);
+  ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(label,x+h*0.35,y+h*0.46);
+  ctx.globalAlpha=0.6; ctx.fillStyle=N.col; ctx.textAlign='right'; ctx.fillText(N.icon,x+w-h*0.3,y+h*0.46);
+  ctx.restore();
+}
+function drawFx(ctx,g,cs){                       /* hard drop: a streak behind the piece and a puff of dust where it lands */
   if(!g.fx)return;
-  var age=performance.now()-g.fx.t;
-  if(age>=240){g.fx=null;return;}
-  var k=1-age/240, fm=g.fx.m, rr, cc2;
+  var age=gameNow()-g.fx.t;
+  if(age>=320){g.fx=null;return;}
+  var fm=g.fx.m, rr, cc2, d=age/320;
+  ctx.fillStyle=C_FG;
+  for(cc2=0;cc2<fm[0].length;cc2++){
+    var bot=-1; for(rr=fm.length-1;rr>=0;rr--)if(fm[rr][cc2]){bot=rr;break;}
+    if(bot<0)continue;
+    var px=(g.fx.x+cc2+0.5)*cs, py=(g.fx.y1+bot+1)*cs-1, spread=cs*(0.2+d*0.9), lift=cs*0.35*Math.sin(d*Math.PI);
+    ctx.globalAlpha=0.5*(1-d);
+    ctx.beginPath(); ctx.arc(px-spread,py-lift,Math.max(1,cs*0.09*(1-d)),0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(px+spread,py-lift,Math.max(1,cs*0.09*(1-d)),0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  if(age>=240)return;
+  var k=1-age/240;
   ctx.fillStyle=g.fx.col;
   for(cc2=0;cc2<fm[0].length;cc2++){
     var top=-1;
@@ -621,7 +705,7 @@ function drawFx(ctx,g,cs){                       /* hard-drop streak */
 }
 /* power effects on a board: the burst where a power piece settled, the banner, live effects and their countdowns */
 function drawPowerFx(ctx,cv,g,cs){
-  var now=performance.now(), W=cv._w, H=cv._h, P, age, k, i;
+  var now=gameNow(), W=cv._w, H=cv._h, P, age, k, i;
   if(g.fxOn&&g.fxOn('shield')){                   /* shield: a breathing green frame */
     P=POWERS.shield; var pulse=0.55+0.45*Math.sin(now/220);
     ctx.save(); ctx.shadowColor=P.col; ctx.shadowBlur=cs*0.8*pulse; ctx.strokeStyle=P.col; ctx.globalAlpha=0.6+0.4*pulse; ctx.lineWidth=Math.max(3,cs*0.16);
@@ -675,6 +759,7 @@ function drawPowerFx(ctx,cv,g,cs){
     ctx.fillStyle=Pb.col; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.font='700 '+Math.round(h*0.62)+'px '+tok('--font-mono','monospace');
     ctx.fillText(Pb.icon+' '+Math.ceil(b[1]/1000),x+h*0.3,y+h*0.47); ctx.restore();
   });
+  drawNotice(ctx,cv,g,cs);
   if(g.banner){                                    /* the big word in the middle */
     age=now-g.banner.t;
     if(age>1500)g.banner=null;
@@ -700,6 +785,28 @@ function drawPowerFx(ctx,cv,g,cs){
     }
   }
 }
+/* a short notice across the top third of a board, such as a level change */
+function drawNotice(ctx,cv,g,cs){
+  if(!g.notice)return;
+  var age=gameNow()-g.notice.t, W=cv._w, H=cv._h;
+  if(age>1800){g.notice=null;return;}
+  var pop=age<200?1.4-0.4*(age/200):1, fade=age>1300?1-(age-1300)/500:1, size=Math.round(Math.min(cs*1.8,W/7)*pop);
+  ctx.save(); ctx.globalAlpha=Math.max(0,fade); ctx.textAlign='center'; ctx.textBaseline='middle';
+  var y=H*0.2, bandH=size*1.9;
+  var grad=ctx.createLinearGradient(0,0,W,0);
+  grad.addColorStop(0,'rgba(242,177,52,0)'); grad.addColorStop(0.5,'rgba(242,177,52,.28)'); grad.addColorStop(1,'rgba(242,177,52,0)');
+  ctx.fillStyle=grad; ctx.fillRect(0,y-bandH/2,W,bandH);
+  ctx.font='900 '+size+'px '+tok('--font-display','Impact,sans-serif');
+  ctx.lineWidth=Math.max(3,size*0.12); ctx.strokeStyle='rgba(10,13,18,.9)'; ctx.strokeText(g.notice.text.toUpperCase(),0+W/2,y-size*0.15);
+  ctx.fillStyle='#f2b134'; ctx.shadowColor='#f2b134'; ctx.shadowBlur=cs; ctx.fillText(g.notice.text.toUpperCase(),W/2,y-size*0.15);
+  if(g.notice.sub){
+    ctx.shadowBlur=0; ctx.font='700 '+Math.max(10,Math.round(size*0.36))+'px '+tok('--font-mono','monospace');
+    ctx.fillStyle='#fff'; ctx.fillText(g.notice.sub.toUpperCase(),W/2,y+size*0.62);
+  }
+  ctx.restore();
+}
+/* tells a board (or co-op board) that the level went up */
+function levelUp(g,lv){if(g)g.notice={text:'Level '+lv,sub:'Faster',t:gameNow()};}
 function drawBoard(cv,g,cs){
   var ctx=cv.getContext('2d');
   drawGrid(cv,g.board[0].length,cs); drawCells(ctx,g.board,cs,g.pal);
@@ -718,9 +825,23 @@ function drawCoop(cv,co,cs){
   drawGrid(cv,co.board[0].length,cs); drawCells(ctx,co.board,cs,co.pal);
   for(var i=0;i<2;i++){
     var g=co.p[i];
-    if(g.cur&&!co.over)drawPiece(ctx,g,g.cur,cs,PAL[1+i],co.pal);
+    if(g.cur&&!co.over)drawPiece(ctx,g,g.cur,cs,co.marks?co.marks[i]:PAL[1+i],co.pal);
     drawFx(ctx,g,cs);
   }
+  var pend=co.pendingAll?co.pendingAll():0;
+  if(pend>0){                                      /* the team's waiting garbage */
+    var ph=Math.min(pend,ROWS)*cs, ah=Math.min(co.armedAll(),ROWS)*cs, mw=Math.max(4,cs*0.18);
+    ctx.fillStyle=C_DANGER; ctx.globalAlpha=0.4; ctx.fillRect(0,cv._h-ph,mw,ph-ah);
+    ctx.globalAlpha=1; ctx.fillRect(0,cv._h-ah,mw,ah);
+  }
+  if(co.p[0].effects)co.p.forEach(function(g,i){
+    var save=g.notice; g.notice=null;
+    if(i===1){var e=g.effects; g.effects={};}     /* the lanes share effects: draw the badges once */
+    drawPowerFx(ctx,cv,g,cs);
+    if(i===1)g.effects=e;
+    g.notice=save;
+  });
+  drawNotice(ctx,cv,co,cs);
 }
 /* the board turns upside down while Flip is on (a CSS flip on the element around the canvas) */
 function syncFlip(el,g){if(el)el.classList.toggle('flipped',!!(g&&g.fxOn&&g.fxOn('flip')));}
@@ -732,7 +853,7 @@ function drawKO(cv,cs){
   ctx.fillText('KO',cv._w/2,cv._h/2);
 }
 function drawMini(ctx,t,sp,ox,oy,s,pal,kOff){
-  var m=SHAPES[t], minR=9,maxR=-1,minC=9,maxC=-1,r,c,k=0,now=performance.now();
+  var m=SHAPES[t], minR=9,maxR=-1,minC=9,maxC=-1,r,c,k=0,now=gameNow();
   for(r=0;r<m.length;r++)for(c=0;c<m[r].length;c++)if(m[r][c]){minR=Math.min(minR,r);maxR=Math.max(maxR,r);minC=Math.min(minC,c);maxC=Math.max(maxC,c);}
   var bw=(maxC-minC+1)*s, bh=(maxR-minR+1)*s;
   ox-=bw/2; oy-=bh/2;

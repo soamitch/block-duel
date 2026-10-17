@@ -88,10 +88,15 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 #result{position:fixed; inset:0; background:var(--scrim); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1.2rem; text-align:center; z-index:4}
 #result h2{font:900 8rem/1 var(--font-display); text-transform:uppercase; letter-spacing:.03em}
 #result p{margin:0; font-size:1.5rem; color:var(--dim)}
+#pauseOv{position:fixed; inset:0; background:var(--scrim); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1rem; text-align:center; z-index:4}
+#pauseOv h2{font:900 8rem/1 var(--font-display); text-transform:uppercase; letter-spacing:.03em; color:var(--accent)}
+#pauseOv p{margin:0; font-size:1.5rem; color:var(--dim)}
 #resTally{font:600 2rem var(--font-mono); color:var(--fg)}
 
-@keyframes thud{0%{transform:translateY(0)}35%{transform:translateY(.35rem)}100%{transform:translateY(0)}}
-@media (prefers-reduced-motion:no-preference){canvas.thud{animation:thud .16s ease-out}}
+/* the level number pops when the shared level goes up */
+.stat b,.coopbar b{display:inline-block}
+@keyframes bump{0%{transform:scale(1.7);color:var(--accent)}60%{color:var(--accent)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:no-preference){.bump{animation:bump .7s ease-out}}
 @media (max-aspect-ratio:1/1){
   #lobby{grid-template-columns:1fr; padding:2rem; gap:2rem}
   .title{font-size:5rem}
@@ -135,6 +140,7 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 </main>
 <div id="snd">Click this screen once to turn on sound</div>
 <div id="count" hidden></div>
+<div id="pauseOv" hidden><h2>Paused</h2><p id="pauseHint"></p></div>
 <div id="result" hidden>
   <h2 id="resTitle"></h2>
   <div id="resTally"></div>
@@ -150,6 +156,7 @@ var SEATCOL=[tok('--p1'),tok('--p2')];
 /* The TV only plays the big moments: line clears and garbage landing here, plus KOs, the countdown and the result elsewhere.
    Move, rotate, drop and hold sounds come from each player's phone. */
 var TV_SFX={clear:1,garbage:1,arm:1,power:1,zap:1,block:1};
+function bump(el){if(!el)return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');}
 
 /* ------------------------------------------------------------- panels */
 var panels=[null,null], cs=24;
@@ -174,13 +181,15 @@ function layout(){
   var gap=4*rem, pad=4*rem;
   var byH=(H-9*rem)/ROWS;
   var byW=(W-pad-gap-2*perPanelExtra)/(2*COLS);
-  if(match&&match.coop)byW=(W-pad-2*perPanelExtra)/COOP_COLS;
-  cs=Math.max(10,Math.floor(Math.min(byH,byW)));
-  if(coPanel){
-    setCanvas(coPanel.board,COOP_COLS*cs,ROWS*cs);
-    var cns=Math.max(8,Math.floor(cs*0.62)); coPanel.ns=cns;
-    for(var k=0;k<2;k++){setCanvas(coPanel.nxt[k],Math.ceil(7.5*rem),Math.ceil(cns*6));setCanvas(coPanel.hld[k],Math.ceil(7.5*rem),Math.ceil(cns*3));}
-  }
+  if(match&&match.coop)byW=coPanel2?(W-pad-gap-4*perPanelExtra)/(2*COOP_COLS):(W-pad-2*perPanelExtra)/COOP_COLS;
+  cs=Math.max(8,Math.floor(Math.min(byH,byW)));
+  [coPanel,coPanel2].forEach(function(cp){
+    if(!cp)return;
+    setCanvas(cp.board,COOP_COLS*cs,ROWS*cs);
+    var cns=Math.max(7,Math.floor(cs*0.62)); cp.ns=cns;
+    var rw=Math.ceil((coPanel2?6:7.5)*rem);
+    for(var k=0;k<2;k++){setCanvas(cp.nxt[k],rw,Math.ceil(cns*6));setCanvas(cp.hld[k],rw,Math.ceil(cns*3));}
+  });
   panels.forEach(function(p){
     if(!p)return;
     setCanvas(p.board,COLS*cs,ROWS*cs);
@@ -200,6 +209,10 @@ var ready=[false,false], conn=[false,false], wins=[0,0], forfeit=[0,0];
 var rules='ko';                    /* 'ko' or 'classic', picked on either phone */
 var mode='versus';                 /* 'versus' or 'coop' (one shared wide board), picked on either phone */
 var co=null, coPanel=null, coopBest=0;
+var coopCpu='';                    /* co-op against a computer team: '', or its difficulty */
+var co2=null, coPanel2=null, cbots=[null,null];
+var paused=false, pausedBy=-1;
+try{var cc=localStorage.getItem('bd-coopcpu');if(CPU[cc])coopCpu=cc;}catch(e){}
 var powers=true;                   /* power pieces in versus, switched on either phone */
 var packs=['classic','classic'];   /* each player's colour pack, sent by their phone */
 try{if(localStorage.getItem('bd-powers')==='0')powers=false;}catch(e){}
@@ -214,7 +227,7 @@ function setNet(on){
 }
 function bcState(){
   if(!ws||ws.readyState!==1)return;
-  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,mode:mode,powers:powers,hits:games.map(function(g){return g?[g.hits,g.lastHit]:null;}),coop:match&&match.coop?{lines:co?co.lines:0,best:coopBest}:null,kos:match&&match.ko?match.kos.slice():null}}));
+  ws.send(JSON.stringify({t:'bc',m:{phase:phase,ready:ready.slice(),conn:conn.slice(),wins:wins.slice(),winner:match?match.winner:null,solo:!!(match&&match.solo),cpu:match&&match.cpu!=null?{seat:match.cpu,level:match.level}:null,rules:rules,koMin:koMin,mode:mode,powers:powers,hits:games.map(function(g){return g?[g.hits,g.lastHit]:null;}),coop:match&&match.coop?{lines:co?co.lines:0,best:coopBest,cpu:match.vsCpu||null}:null,coopCpu:coopCpu,paused:paused,pausedBy:pausedBy,kos:match&&match.ko?match.kos.slice():null}}));
 }
 function connect(){
   clearTimeout(wsTimer);
@@ -247,7 +260,7 @@ function onSeats(list){
         (function(seat){
           forfeit[seat]=setTimeout(function(){
             forfeit[seat]=0;
-            if((phase==='countdown'||phase==='playing')&&!conn[seat]){if(match.coop)finish(null);else if(!games[seat])return;else if(match.solo)games[seat].die();else finish(1-seat);}
+            if((phase==='countdown'||phase==='playing')&&!conn[seat]){if(match.coop)finish(match.vsCpu?1:null);else if(!games[seat])return;else if(match.solo)games[seat].die();else finish(1-seat);}
           },FORFEIT_MS);
         })(i);
       }else if(conn[i]&&forfeit[i]){clearTimeout(forfeit[i]);forfeit[i]=0;}
@@ -260,13 +273,23 @@ function onSeats(list){
 function onPad(seat,m){
   if(seat!==0&&seat!==1||!m)return;
   if(m.t==='in'){
-    if(phase!=='playing')return;
+    if(phase!=='playing'||paused)return;
     if(match.coop){if(co)co.apply(seat,m.k);}
     else if(games[seat]&&!games[seat].over&&!bots[seat])games[seat].apply(m.k);
   }else if(m.t==='rules'){
     if(phase!=='lobby'&&phase!=='result')return;
     rules=m.v?'ko':'classic';
     try{localStorage.setItem('bd-rules',rules);}catch(e){}
+    renderLobby(); bcState();
+  }else if(m.t==='pause'){
+    if(phase!=='playing'&&phase!=='countdown')return;
+    setPaused(!!m.v,seat);
+  }else if(m.t==='end'){
+    if(phase==='playing'||phase==='countdown')endMatch();
+  }else if(m.t==='coopcpu'){
+    if(phase!=='lobby'&&phase!=='result')return;
+    coopCpu=CPU[m.p]?m.p:'';
+    try{localStorage.setItem('bd-coopcpu',coopCpu);}catch(e){}
     renderLobby(); bcState();
   }else if(m.t==='powers'){
     if(phase!=='lobby'&&phase!=='result')return;
@@ -313,24 +336,27 @@ function renderLobby(){
     sw.innerHTML=conn[i]?PACKS[packs[i]].c.slice(0,7).map(function(c){return '<i style="background:'+c+'"></i>';}).join(''):'';
   }
   $('#rules').textContent=mode==='coop'?
-    'Mode: Co-op. Both players build on one wide board and clear lines together. The run ends when the stack reaches the top.'+(coopBest?' Best so far: '+coopBest+' lines.':''):
+    (coopCpu?'Mode: Co-op against the computer ('+CPU_NAME[coopCpu]+'). You two share one wide board against a computer team on another; lines send garbage across.'+(rules==='ko'?' First team to '+KO_TO_WIN+' KOs wins.':' Top out and your team loses.'):
+    'Mode: Co-op. Both players build on one wide board and clear lines together. The run ends when the stack reaches the top.'+(coopBest?' Best so far: '+coopBest+' lines.':'')):
     rules==='ko'?
     'Rules: KO. Topping out clears your board and gives the other player a KO. First to '+KO_TO_WIN+' KOs wins'+(koMin?', or the most KOs after '+koMin+(koMin===1?' minute.':' minutes.'):'. No time limit.'):
     'Rules: Classic. Top out once and you lose.';
-  if(mode!=='coop')$('#rules').textContent+=powers?' Power-ups on: shimmering pieces settle into a power when placed.':' Power-ups off.';
+  if(mode!=='coop'||coopCpu)$('#rules').textContent+=powers?' Power-ups on: shimmering pieces settle into a power when placed.':' Power-ups off.';
 }
+function teamTag(i){return i===0?'You':'CPU';}
 function seatName(i){return match&&match.cpu===i?'Computer · '+CPU_NAME[match.level]:'Player '+(i+1);}
-function seatTag(i){return match&&match.cpu===i?'CPU':'P'+(i+1);}
+function seatTag(i){return match&&match.vsCpu?teamTag(i):match&&match.cpu===i?'CPU':'P'+(i+1);}
 function showTally(){
   $('#tally').innerHTML='<span style="color:'+SEATCOL[0]+'">'+seatTag(0)+'</span> <b>'+wins[0]+'</b> &nbsp;&ndash;&nbsp; <b>'+wins[1]+'</b> <span style="color:'+SEATCOL[1]+'">'+seatTag(1)+'</span>';
-  $('#tally').hidden=!!(match&&(match.solo||match.coop));
+  $('#tally').hidden=!!(match&&(match.solo||(match.coop&&!match.vsCpu)));
 }
 function startMatch(seatList,cpu){
   var seed=Math.floor(Math.random()*2147483647);
   var solo=seatList.length===1;
-  match={seats:seatList.slice(),solo:solo,t0:performance.now()+COUNTDOWN,winner:null,cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&rules==='ko',kos:[0,0]};
+  match={seats:seatList.slice(),solo:solo,t0:gameNow()+COUNTDOWN,winner:null,cpu:cpu?cpu.seat:null,level:cpu?cpu.level:null,ko:!solo&&rules==='ko',kos:[0,0]};
   match.tEnd=koMin?match.t0+koMin*60000:Infinity;
-  co=null; coPanel=null;
+  co=null; coPanel=null; co2=null; coPanel2=null; cbots=[null,null];
+  resumeClock(); paused=false; pausedBy=-1; $('#pauseOv').hidden=true;
   var kind=solo?lastKind:(cpu?'cpu-'+cpu.level:'pvp');   /* the score resets when you switch between friends and the computer */
   if(kind!==lastKind){wins=[0,0];lastKind=kind;}
   games=[null,null]; bots=[null,null];
@@ -355,7 +381,7 @@ function startMatch(seatList,cpu){
       if(!match.ko){finish(other);return;}
       match.kos[other]++;
       if(match.kos[other]>=KO_TO_WIN){finish(other);return;}
-      g.koUntil=performance.now()+KO_RESPAWN_MS;
+      g.koUntil=gameNow()+KO_RESPAWN_MS;
       SFX.play('ko',i===0?-0.6:0.6);
       bcState();
     };
@@ -369,38 +395,84 @@ function startMatch(seatList,cpu){
   showTally(); layout();
   bcState();
 }
-function buildCoopPanel(){
+/* a wide co-op board with a rail for each lane; names and colours for the lanes, cpu for the computer team's board */
+function buildCoopPanel(title,names,cols,cpu){
   var el=document.createElement('section');
   el.className='panel coop';
   function rail(i){
-    return '<div class="side" style="--pc:'+SEATCOL[i]+'"><div class="who"><i></i><span>Player '+(i+1)+'</span></div><em class="away" hidden>Reconnecting</em>'+
+    return '<div class="side" style="--pc:'+cols[i]+'"><div class="who"><i></i><span>'+names[i]+'</span></div><em class="away" hidden>Reconnecting</em>'+
       '<div class="blk"><div class="lbl">Hold</div><canvas class="hld'+i+'"></canvas></div><div class="blk"><div class="lbl">Next</div><canvas class="nxt'+i+'"></canvas></div></div>';
   }
-  el.innerHTML='<div class="coopbar"><span>Co-op</span><span>Lines<b class="ln">0</b></span><span>Level<b class="lv">1</b></span><span>Best<b class="bs">'+coopBest+'</b></span></div>'+
-    '<div class="row">'+rail(0)+'<canvas class="board"></canvas>'+rail(1)+'</div>';
-  return {el:el,board:el.querySelector('canvas.board'),hld:[el.querySelector('.hld0'),el.querySelector('.hld1')],nxt:[el.querySelector('.nxt0'),el.querySelector('.nxt1')],
-    away:el.querySelectorAll('em.away'),ln:el.querySelector('.ln'),lv:el.querySelector('.lv'),shown:''};
+  el.innerHTML='<div class="coopbar"><span>'+title+'</span><span>Lines<b class="ln">0</b></span><span>Level<b class="lv">1</b></span>'+
+    (cpu||match.vsCpu?'<span class="kob" hidden>KOs<b class="kn">0</b></span>':'<span>Best<b class="bs">'+coopBest+'</b></span>')+'</div>'+
+    '<div class="row">'+rail(0)+'<div class="flipper"><canvas class="board"></canvas></div>'+rail(1)+'</div>';
+  return {el:el,flip:el.querySelector('.flipper'),board:el.querySelector('canvas.board'),hld:[el.querySelector('.hld0'),el.querySelector('.hld1')],nxt:[el.querySelector('.nxt0'),el.querySelector('.nxt1')],
+    away:el.querySelectorAll('em.away'),ln:el.querySelector('.ln'),lv:el.querySelector('.lv'),kn:el.querySelector('.kn'),kob:el.querySelector('.kob'),shown:''};
+}
+/* a team's board topped out: with KO rules the other team scores and the board starts again, otherwise the other team wins */
+function teamOut(team){
+  if(phase!=='playing'&&phase!=='countdown')return;
+  var other=1-team, board=team===0?co:co2;
+  if(!match.ko){finish(other);return;}
+  match.kos[other]++;
+  if(match.kos[other]>=KO_TO_WIN){finish(other);return;}
+  board.koUntil=gameNow()+KO_RESPAWN_MS;
+  SFX.play('ko',team===0?-0.4:0.4);
+  bcState();
 }
 function startCoop(){
-  var seed=Math.floor(Math.random()*2147483647);
-  match={seats:[0,1],solo:false,coop:true,t0:performance.now()+COUNTDOWN,winner:null,cpu:null,level:null,ko:false,kos:[0,0],tEnd:Infinity};
-  games=[null,null]; bots=[null,null]; panels=[null,null];
-  co=new CoopGame(seed); co.pal=packPal(packs[0]);
-  co.sfx=function(i,n,a){if(TV_SFX[n])SFX.play(n,i===0?-0.4:0.4,a);};
-  co.onOver=function(){if(phase==='playing'||phase==='countdown')finish(null);};
-  coPanel=buildCoopPanel();
+  var seed=Math.floor(Math.random()*2147483647), vs=coopCpu||null;
+  resumeClock(); paused=false; pausedBy=-1; $('#pauseOv').hidden=true;
+  match={seats:[0,1],solo:false,coop:true,vsCpu:vs,t0:gameNow()+COUNTDOWN,winner:null,cpu:null,level:null,ko:!!vs&&rules==='ko',kos:[0,0],tEnd:Infinity};
+  if(match.ko&&koMin)match.tEnd=match.t0+koMin*60000;
+  var kind=vs?'coopcpu-'+vs:lastKind;
+  if(kind!==lastKind){wins=[0,0];lastKind=kind;}
+  games=[null,null]; bots=[null,null]; panels=[null,null]; co2=null; coPanel2=null; cbots=[null,null];
+  co=new CoopGame(seed,{powers:!!vs&&powers}); co.pal=packPal(packs[0]);
+  co.sfx=function(i,n,a){if(TV_SFX[n])SFX.play(n,vs?-0.5:(i===0?-0.4:0.4),a);};
+  co.onOver=function(){if(phase!=='playing'&&phase!=='countdown')return; if(vs)teamOut(0); else finish(null);};
+  coPanel=buildCoopPanel(vs?'Team':'Co-op',['Player 1','Player 2'],SEATCOL,false);
   var field=$('#field'); field.innerHTML=''; field.appendChild(coPanel.el);
+  if(vs){
+    co2=new CoopGame(seed,{powers:powers}); co2.marks=[tok('--fg'),tok('--dim')];
+    co2.sfx=function(i,n,a){if(n==='clear'||n==='garbage'||n==='zap'||n==='block')SFX.play(n,0.5,a);};
+    co2.onOver=function(){teamOut(1);};
+    cbots=[new Bot(co2.p[0],vs),new Bot(co2.p[1],vs)];
+    co.onSend=function(n){if(!co2.over)co2.receive(n);}; co2.onSend=function(n){if(!co.over)co.receive(n);};
+    co.onPower=function(pw){if(!co2.over)co2.hit(pw);}; co2.onPower=function(pw){if(!co.over){co.hit(pw);bcState();}};
+    coPanel2=buildCoopPanel('CPU · '+CPU_NAME[vs],['CPU 1','CPU 2'],[tok('--fg'),tok('--dim')],true);
+    field.appendChild(coPanel2.el);
+    [coPanel,coPanel2].forEach(function(cp){if(cp.kob)cp.kob.hidden=!match.ko;});
+  }
   for(var i=0;i<2;i++){clearTimeout(forfeit[i]);forfeit[i]=0;}
   ready=[false,false];
   phase='countdown';
-  $('#lobby').hidden=true; $('#match').hidden=false; $('#result').hidden=true; $('#clock').hidden=true;
+  $('#lobby').hidden=true; $('#match').hidden=false; $('#result').hidden=true;
+  $('#clock').hidden=!(match.ko&&koMin); $('#clock').textContent=fmtClock(koMin*60000); $('#clock').className='clock';
   showTally(); layout();
   bcState();
+}
+/* pause: freezes the game clock; any phone can resume */
+function setPaused(on,seat){
+  if(on===paused)return;
+  paused=on; pausedBy=on?seat:-1;
+  if(on)pauseClock(); else resumeClock();
+  $('#pauseOv').hidden=!on;
+  $('#pauseHint').textContent='Player '+(seat+1)+' paused the game. Tap Resume on a phone to carry on.';
+  bcState();
+}
+/* end the match from the pause screen: back to the lobby, nobody scores */
+function endMatch(){
+  setPaused(false,-1);
+  phase='lobby'; match=null; co=null; co2=null; coPanel=null; coPanel2=null; games=[null,null]; bots=[null,null]; cbots=[null,null];
+  ready=[false,false];
+  $('#match').hidden=true; $('#result').hidden=true; $('#count').hidden=true; $('#pauseOv').hidden=true; $('#lobby').hidden=false;
+  renderLobby(); bcState();
 }
 function fmtClock(ms){var t=Math.max(0,Math.ceil(ms/1000));return Math.floor(t/60)+':'+('0'+t%60).slice(-2);}
 function timeUp(){
   var k=match.kos, w=k[0]>k[1]?0:k[1]>k[0]?1:-1;
-  if(w<0){var a=games[0].sent, b=games[1].sent; w=a>b?0:b>a?1:-1;}
+  if(w<0){var a=match.coop?co.sentAll():games[0].sent, b=match.coop?co2.sentAll():games[1].sent; w=a>b?0:b>a?1:-1;}
   match.timeUp=true;
   finish(w);
 }
@@ -409,11 +481,16 @@ function finish(winner){
   phase='result';
   match.winner=winner;
   games.forEach(function(g){if(g)g.over=true;});
-  if(co)co.die();
+  if(co)co.die(); if(co2)co2.die();
+  setPaused(false,-1);
   if(winner!==null&&winner>=0)wins[winner]++;
   showTally();
   var t=$('#resTitle');
-  if(match.coop){
+  if(match.coop&&match.vsCpu){
+    t.textContent=winner===0?'You win':winner===1?'Computer wins':'Draw'; t.style.color=winner===0?'var(--good)':'';
+    $('#resTally').innerHTML=teamTag(0)+' '+wins[0]+' &ndash; '+wins[1]+' '+teamTag(1);
+    $('#resHint').textContent=(match.ko?(match.timeUp?'Time ran out. ':'')+'KOs '+match.kos[0]+' to '+match.kos[1]+'. ':'')+'Tap Play again on both phones to go again.';
+  }else if(match.coop){
     var n=co?co.lines:0, best=n>coopBest;
     if(best){coopBest=n;try{localStorage.setItem('bd-coop-best',String(n));}catch(e){}}
     t.textContent=best&&n>0?'New best':'Game over'; t.style.color='';
@@ -433,14 +510,37 @@ function finish(winner){
     $('#resHint').textContent=match.cpu!=null?'Tap Rematch on your phone to go again.':'Tap Rematch on your phones to go again.';
     if(match.ko)$('#resHint').textContent=(match.timeUp?'Time ran out. ':'')+'KOs '+match.kos[0]+' to '+match.kos[1]+'. '+$('#resHint').textContent;
   }
-  SFX.play(match.coop?(co&&co.lines>0&&co.lines>=coopBest?'win':'lose'):(winner===null||winner<0?'lose':'win'));
+  SFX.play(match.coop&&match.vsCpu?(winner===0?'win':'lose'):match.coop?(co&&co.lines>0&&co.lines>=coopBest?'win':'lose'):(winner===null||winner<0?'lose':'win'));
   $('#count').hidden=true; $('#result').hidden=false;
   ready=[false,false];
   renderLobby(); bcState();
 }
 
 /* ------------------------------------------------------------- loop */
-function frame(ts){
+/* co-op boards each frame: KO restarts, the computer team, the level (shared with the computer team when there is one) */
+function coopTick(ts){
+  var teams=[co,co2].filter(function(c){return c;});
+  teams.forEach(function(c){if(c.over&&c.koUntil&&ts>=c.koUntil)c.revive();});
+  if(co2){
+    var lv=1+Math.floor((co.lines+co2.lines)/(COOP_LEVEL_LINES*2))+Math.floor(Math.max(0,ts-match.t0)/LEVEL_EVERY_MS);
+    if(match.lv&&lv>match.lv){teams.forEach(function(c){levelUp(c,lv);}); SFX.play('level'); bump(coPanel.lv); bump(coPanel2.lv);}
+    match.lv=lv; teams.forEach(function(c){c.levelOverride=lv;});
+    cbots.forEach(function(b){if(b&&!co2.over)b.tick(ts);});
+  }
+  teams.forEach(function(c){
+    var clv=c.level; if(!c.over)c.tick(ts,match.t0);
+    if(!co2&&c.level>clv&&clv>0){levelUp(c,c.level);SFX.play('level');bump(coPanel.lv);}
+  });
+}
+function drawCoopPanel(cp,c,team){
+  drawCoop(cp.board,c,cs); if(c.over&&c.koUntil)drawKO(cp.board,cs); syncFlip(cp.flip,c);
+  for(var q=0;q<2;q++){drawNext(cp.nxt[q],c.p[q],cp.ns,2);drawHold(cp.hld[q],c.p[q],cp.ns);}
+  var kos=match.kos[team], key=c.lines+'|'+c.level+'|'+kos;
+  if(cp.shown!==key){cp.shown=key;cp.ln.textContent=c.lines;cp.lv.textContent=c.level;if(cp.kn)cp.kn.textContent=kos+' / '+KO_TO_WIN;if(team===0)bcState();}
+}
+function frame(){
+  var ts=gameNow();                                /* the game clock, which stands still while paused */
+  if(match&&!paused&&phase==='playing'&&match.coop)coopTick(ts);
   if(match){
     var cnt=$('#count');
     if(phase==='countdown'){
@@ -452,20 +552,20 @@ function frame(ts){
         cnt.hidden=false;cnt.textContent=sec;
       }
     }
-    if(phase==='playing'&&co)co.tick(ts,match.t0);
-    if(coPanel&&co){
-      drawCoop(coPanel.board,co,cs);
-      for(var q=0;q<2;q++){drawNext(coPanel.nxt[q],co.p[q],coPanel.ns,2);drawHold(coPanel.hld[q],co.p[q],coPanel.ns);}
-      var ck2=co.lines+'|'+co.level;
-      if(coPanel.shown!==ck2){coPanel.shown=ck2;coPanel.ln.textContent=co.lines;coPanel.lv.textContent=co.level;bcState();}
-      if((co.p[0].thud&&performance.now()-co.p[0].thud<10)||(co.p[1].thud&&performance.now()-co.p[1].thud<10)){
-        coPanel.board.classList.remove('thud'); void coPanel.board.offsetWidth; coPanel.board.classList.add('thud'); co.p[0].thud=co.p[1].thud=0;
+    if(coPanel&&co)drawCoopPanel(coPanel,co,0);
+    if(coPanel2&&co2)drawCoopPanel(coPanel2,co2,1);
+    if(phase==='playing'&&!paused&&!match.solo&&!match.coop){   /* versus: one level for both boards */
+      var lv=sharedLevel((games[0]?games[0].lines:0)+(games[1]?games[1].lines:0),ts-match.t0);
+      if(match.lv&&lv>match.lv){
+        games.forEach(function(g){levelUp(g,lv);}); SFX.play('level');
+        panels.forEach(function(p){if(p)bump(p.lv);});
       }
+      match.lv=lv; games.forEach(function(g){if(g)g.levelOverride=lv;});
     }
-    if(phase==='playing'){
+    if(phase==='playing'&&!paused){
       for(var i=0;i<2;i++){var g=games[i];if(g&&g.over&&g.koUntil&&ts>=g.koUntil)g.revive();if(g&&!g.over){if(bots[i])bots[i].tick(ts);if(!g.over)g.tick(ts,match.t0);}}
     }
-    if(phase==='playing'&&match.ko&&match.tEnd<Infinity){
+    if(phase==='playing'&&!paused&&match.ko&&match.tEnd<Infinity){
       var rem=match.tEnd-ts, ck=$('#clock'), txt=fmtClock(rem);
       if(ck.textContent!==txt){ck.textContent=txt;ck.className='clock'+(rem<=30000?' low':'');}
       if(rem<=0)timeUp();
@@ -477,9 +577,6 @@ function frame(ts){
       var kos=match.kos[j];
       var key=gg.level+'|'+gg.lines+'|'+gg.sent+'|'+kos;
       if(p.shown!==key){p.shown=key;p.lv.textContent=gg.level;p.ln.textContent=gg.lines;p.sn.textContent=gg.sent;p.kn.textContent=kos+' / '+KO_TO_WIN;}
-      if(gg.thud&&performance.now()-gg.thud<10){
-        p.board.classList.remove('thud'); void p.board.offsetWidth; p.board.classList.add('thud'); gg.thud=0;
-      }
     }
   }
   requestAnimationFrame(frame);
@@ -491,7 +588,7 @@ fetch('/info').then(function(r){return r.json();}).then(function(d){$('#url').te
 renderLobby();
 connect();
 requestAnimationFrame(frame);
-window.BD={get co(){return co;},get games(){return games;},get phase(){return phase;},get match(){return match;},get wins(){return wins;}};
+window.BD={get co(){return co;},get co2(){return co2;},get paused(){return paused;},get games(){return games;},get phase(){return phase;},get match(){return match;},get wins(){return wins;}};
 })();
 </script>
 </body>
