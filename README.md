@@ -105,13 +105,6 @@ The swipe sensitivity slider in the phone lobby sets how far a drag moves the pi
 The TV plays the big moments: line clears, garbage landing, KOs, the countdown and the result. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
 Each phone plays the sounds of its own moves, rotations, drops and holds. When playing on phones only, each phone plays all the sounds for its own board. Turn phone sound on or off in the phone lobby.
 
-**Fergie mode**: under "Your colours, swipe and sound", set Moves to Fergie. Each left or right
-move then plays the next note of a tune instead of the usual click, and the tune starts again
-after a short pause. To choose the tune, put a MIDI file named `fergie.mid` in this folder (next
-to `server.js`): its notes play in order, notes that start together play together, each as a
-short pitched click. The file is git-ignored, so it stays on your computer. Without it, a
-built-in beat plays (`BEAT` in `game.js`). The phone lobby says which one is in use.
-
 Clearing 2, 3 or 4 lines at once sends 1, 1 or 3 garbage rows to the other board.
 Incoming garbage waits 1.5 seconds before it lands, so you can clear lines to cancel it.
 Both players get the same pieces in the same order.
