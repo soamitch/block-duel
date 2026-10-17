@@ -476,6 +476,27 @@ Bot.prototype.tick=function(ts){
 var SFX=(function(){
   var ctx=null, master=null, on=true, small=false, unlocked=false, stale=false, api;
   try{on=localStorage.getItem('bd-sound')!=='0';}catch(e){}
+  /* Fergie mode (a per-phone choice): each left or right move plays the next step of a tune instead of the usual click. If a MIDI
+     file named fergie.mid sits next to server.js, its notes are used, in order (notes starting together play together), each as a
+     short pitched click; the file is git-ignored, so it stays on this computer. Without it, this original beat plays. Each step
+     lists the hits played together: kick, snare, hat, clap, and bass:N (a note from BASS). Either way, the tune starts again from
+     the top after a pause in moving. */
+  var BASS=[98,98,116.5,130.8,146.8,87.3];
+  var BEAT=[
+    ['kick','bass:0'], ['hat'],          ['snare','clap'], ['hat'],
+    ['kick','bass:1'], ['kick','bass:2'], ['snare'],        ['hat','bass:3'],
+    ['kick','bass:4'], ['hat'],          ['snare','clap'], ['clap'],
+    ['kick','bass:5'], ['hat'],          ['snare','clap'], ['hat','bass:3']
+  ];
+  var beatOn=false, beatI=0, beatAt=0, midiSteps=null, midiTried=false;
+  try{beatOn=localStorage.getItem('bd-beat')==='fergie';}catch(e){}
+  function loadMidi(){
+    if(midiTried)return; midiTried=true;
+    fetch('/fergie.mid',{cache:'no-store'}).then(function(r){return r.ok?r.arrayBuffer():null;})
+      .then(function(b){if(b){midiSteps=parseMidi(b); if(midiSteps&&!midiSteps.length)midiSteps=null;} if(api&&api.onchange)api.onchange();})
+      .catch(function(){});
+  }
+  if(beatOn)loadMidi();
   function badge(){
     if(api&&api.onchange)api.onchange();
     var el=document.getElementById('snd'); if(!el)return;
@@ -531,10 +552,31 @@ var SFX=(function(){
     s.connect(f); f.connect(g); g.connect(out(pan)); s.start(t);
   }
   var NOTE={c5:523,e5:659,g5:784,c6:1047,a4:440,f5:698,e4:330,c4:262};
+  function hit(v,pan){
+    var k=v.split(':');
+    switch(k[0]){
+      case 'kick': tone(150,48,0.2,'sine',0.55,pan); tone(90,60,0.05,'triangle',0.2,pan); break;
+      case 'snare': noise(0.13,0.28,pan,6000); tone(230,180,0.07,'triangle',0.14,pan); break;
+      case 'hat': noise(0.035,0.1,pan,14000); break;
+      case 'clap': [0,0.011,0.023].forEach(function(d){noise(0.05,0.16,pan,4000,d);}); break;
+      case 'bass': {var f=BASS[(+k[1]||0)%BASS.length]; tone(f,f,0.17,'square',0.13,pan); tone(f*2,f*2,0.12,'triangle',0.05,pan); break;}
+    }
+  }
+  function click(n,pan){                          /* one MIDI note as a short pitched click */
+    var f=440*Math.pow(2,(n-69)/12);
+    tone(f,f,0.07,'triangle',0.22,pan); tone(f*2,f*2,0.04,'sine',0.08,pan); noise(0.012,0.08,pan,9000);
+  }
+  function beatStep(pan){
+    var t=Date.now(); if(t-beatAt>2500)beatI=0;     /* a fresh run of moves starts on the downbeat */
+    beatAt=t;
+    if(midiSteps)midiSteps[beatI%midiSteps.length].forEach(function(n){click(n,pan);});
+    else BEAT[beatI%BEAT.length].forEach(function(v){hit(v,pan);});
+    beatI++;
+  }
   function play(name,pan,arg){
     if(!on||!ctx||ctx.state!=='running')return;
     switch(name){
-      case 'move': tone(900,700,0.03,'square',0.035,pan); break;
+      case 'move': if(beatOn){beatStep(pan);break;} tone(900,700,0.03,'square',0.035,pan); break;
       case 'rotate': tone(520,780,0.05,'triangle',0.09,pan); break;
       case 'hold': tone(700,420,0.09,'sine',0.14,pan); tone(420,640,0.09,'sine',0.1,pan,0.07); break;
       case 'lock': tone(180,110,0.07,'triangle',0.16,pan); break;
@@ -563,10 +605,39 @@ var SFX=(function(){
   ['pointerdown','pointerup','touchstart','touchend','click','keydown'].forEach(function(ev){document.addEventListener(ev,function(e){if(ev==='keydown'&&(e.key==='m'||e.key==='M'))return;init();},{passive:true,capture:true});});   /* capture, so a rebuilt context is ready before the tap's own sound plays */
   document.addEventListener('keydown',function(e){if(e.key==='m'||e.key==='M'){init();toggle();}});
   badge();
-  api={init:init,play:play,toggle:toggle,phone:phone,reset:reset,onchange:null,isOn:function(){return on;},state:function(){return ctx?ctx.state:'none';}};
+  function setBeat(v){beatOn=!!v; beatI=0; try{localStorage.setItem('bd-beat',beatOn?'fergie':'click');}catch(e){} if(beatOn)loadMidi();}
+  api={init:init,play:play,toggle:toggle,phone:phone,reset:reset,setBeat:setBeat,beatOn:function(){return beatOn;},beatPos:function(){return beatI;},midiNotes:function(){return midiSteps?midiSteps.length:0;},onchange:null,isOn:function(){return on;},state:function(){return ctx?ctx.state:'none';}};
   return api;
 })();
 
+
+/* Reads a standard MIDI file (format 0 or 1) and returns its note starts in time order, as steps: each step is the list of
+   note numbers that begin on the same tick. Everything else in the file is skipped. Returns null if it is not a MIDI file. */
+function parseMidi(buf){
+  try{
+    var d=new DataView(buf), p=0, at={}, MAX=4096;
+    function tag(o){return String.fromCharCode(d.getUint8(o),d.getUint8(o+1),d.getUint8(o+2),d.getUint8(o+3));}
+    function vlq(){var v=0,b;do{b=d.getUint8(p++);v=(v<<7)|(b&127);}while(b&128);return v;}
+    if(tag(0)!=='MThd')return null;
+    var tracks=d.getUint16(10); p=8+d.getUint32(4);
+    for(var t=0;t<tracks&&p+8<=d.byteLength;t++){
+      if(tag(p)!=='MTrk')break;
+      var end=p+8+d.getUint32(p+4), tick=0, run=0; p+=8;
+      while(p<end){
+        tick+=vlq();
+        var st=d.getUint8(p);
+        if(st&128)p++; else st=run;
+        if(st===0xFF){p++; var ml=vlq(); p+=ml; continue;}      /* meta event */
+        if(st===0xF0||st===0xF7){var sl=vlq(); p+=sl; continue;} /* sysex */
+        run=st;
+        var type=st&0xF0, a=d.getUint8(p++), b=(type===0xC0||type===0xD0)?0:d.getUint8(p++);
+        if(type===0x90&&b>0){(at[tick]||(at[tick]=[])).push(a);}
+      }
+      p=end;
+    }
+    return Object.keys(at).map(Number).sort(function(x,y){return x-y;}).slice(0,MAX).map(function(k){return at[k];});
+  }catch(e){return null;}
+}
 
 /* ------------------------------------------------------------- canvas */
 function setCanvas(cv,w,h){

@@ -207,6 +207,10 @@ const server = http.createServer((req, res) => {
     if (url === '/' || url === '/tv') return send(200, 'text/html; charset=utf-8', file('tv.html'));
     if (url === '/play') return send(200, 'text/html; charset=utf-8', file('play.html'));
     if (url === '/game.js') return send(200, 'text/javascript; charset=utf-8', file('game.js'));
+    if (url === '/fergie.mid') {   /* optional, kept out of git: the tune Fergie mode plays on moves */
+      const f = path.join(__dirname, 'fergie.mid');
+      return fs.existsSync(f) ? send(200, 'audio/midi', fs.readFileSync(f)) : send(404, 'text/plain; charset=utf-8', 'No fergie.mid');
+    }
     if (url === '/qr.svg') return send(200, 'image/svg+xml', qrSvg(PLAY_URL));
     if (url === '/info') return send(200, 'application/json', JSON.stringify({ playUrl: PLAY_URL, tvUrl: BASE + '/' }));
   } catch (e) {

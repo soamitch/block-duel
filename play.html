@@ -146,6 +146,11 @@ details.mine > *+*{margin-top:10px}
           <input type="range" id="sens" min="1" max="5" step="1" value="3" aria-describedby="sensTxt">
           <output id="sensTxt" for="sens"></output>
         </div>
+        <div class="opt" id="movesRow">
+          <span class="lbl">Moves</span>
+          <button class="btn small" data-beat="click" aria-pressed="false">Clicks</button><button class="btn small" data-beat="fergie" aria-pressed="false">Fergie</button>
+        </div>
+        <p class="rules-note" id="beatNote" hidden></p>
         <div class="opt" id="soundRow">
           <span class="lbl">Sound</span>
           <button class="btn small" data-sound="1" aria-pressed="false">On</button><button class="btn small" data-sound="0" aria-pressed="false">Off</button>
@@ -355,6 +360,10 @@ function render(){
   show($('#powersRow'),showRules&&(!coop||ccpu));
   Array.prototype.forEach.call(document.querySelectorAll('[data-powers]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-powers')==='1')===(S.powers!==false)));});
   Array.prototype.forEach.call(document.querySelectorAll('[data-pack]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-pack')===myPack));});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-beat]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-beat')==='fergie')===SFX.beatOn()));});
+  var mn=SFX.midiNotes();
+  $('#beatNote').textContent=mn?'Moves play the notes of fergie.mid ('+mn+' steps).':'No fergie.mid next to server.js, so moves play the built-in beat.';
+  show($('#beatNote'),SFX.beatOn());
   Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){b.setAttribute('aria-pressed',String((b.getAttribute('data-sound')==='1')===SFX.isOn()));});
   show($('#screenRow'),showReady&&room.tv);
   Array.prototype.forEach.call(document.querySelectorAll('[data-screen]'),function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-screen')===room.screen));});
@@ -407,6 +416,12 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-mode]'),function(b
 Array.prototype.forEach.call(document.querySelectorAll('[data-min]'),function(b){
   b.addEventListener('click',function(){act({t:'kotime',min:+b.getAttribute('data-min')});});
 });
+Array.prototype.forEach.call(document.querySelectorAll('[data-beat]'),function(b){
+  b.addEventListener('click',function(){
+    SFX.setBeat(b.getAttribute('data-beat')==='fergie'); SFX.init();
+    SFX.play('move',0); render();                   /* a taste of what a move now sounds like */
+  });
+});
 Array.prototype.forEach.call(document.querySelectorAll('[data-sound]'),function(b){
   b.addEventListener('click',function(){
     if((b.getAttribute('data-sound')==='1')!==SFX.isOn())SFX.toggle();
@@ -421,7 +436,7 @@ function soundNote(visible){
   el.textContent=txt; show(el,visible&&!!txt);
 }
 SFX.phone();
-SFX.onchange=function(){soundNote(!$('#soundRow').hidden);};
+SFX.onchange=function(){soundNote(!$('#soundRow').hidden); render();};
 function showSens(){$('#sens').value=sens;$('#sensTxt').textContent=SENS_NAMES[sens-1];}
 $('#sens').addEventListener('input',function(){
   sens=+this.value; showSens(); vibe(8);

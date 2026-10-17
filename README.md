@@ -77,7 +77,7 @@ stack reaches the top. The best run is remembered. Works on the TV and on phones
 **Co-op against the computer**: in co-op, set Against to Easy, Normal or Hard. You two share
 one wide board against a computer team on another; lines send garbage across, power pieces
 work as in versus (an attack hits both of you, a Shield covers both), and KO rules and the
-time limit apply. Both boards share one level.
+time limit apply. Both boards share one level. On the TV the computer team's board is shown small, beside yours.
 
 **Pause**: tap the pause button at the top of a phone during a game. Everything freezes for
 both players. Either phone can Resume, or End match to go back to the lobby (nobody scores).
@@ -104,6 +104,13 @@ The swipe sensitivity slider in the phone lobby sets how far a drag moves the pi
 ## Sound
 The TV plays the big moments: line clears, garbage landing, KOs, the countdown and the result. Click the TV screen once after opening it (browsers keep audio locked until then), and press M to mute.
 Each phone plays the sounds of its own moves, rotations, drops and holds. When playing on phones only, each phone plays all the sounds for its own board. Turn phone sound on or off in the phone lobby.
+
+**Fergie mode**: under "Your colours, swipe and sound", set Moves to Fergie. Each left or right
+move then plays the next note of a tune instead of the usual click, and the tune starts again
+after a short pause. To choose the tune, put a MIDI file named `fergie.mid` in this folder (next
+to `server.js`): its notes play in order, notes that start together play together, each as a
+short pitched click. The file is git-ignored, so it stays on your computer. Without it, a
+built-in beat plays (`BEAT` in `game.js`). The phone lobby says which one is in use.
 
 Clearing 2, 3 or 4 lines at once sends 1, 1 or 3 garbage rows to the other board.
 Incoming garbage waits 1.5 seconds before it lands, so you can clear lines to cancel it.

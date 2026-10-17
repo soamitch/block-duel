@@ -83,6 +83,10 @@ canvas{display:block; border-radius:.3rem; background:var(--board); border:1px s
 .panel.coop .side .who i{background:var(--pc)}
 .coopbar{display:flex; gap:2.4rem; justify-content:center; font:600 1.1rem var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--dim)}
 .coopbar b{color:var(--fg); font-size:1.4rem; margin-left:.5rem}
+/* the computer team's board in co-op vs the computer: a small board, no rails, stats stacked above it */
+.panel.coop.mini{align-self:center}
+.panel.coop.mini .coopbar{flex-direction:column; align-items:flex-start; gap:.2rem; font-size:.85rem}
+.panel.coop.mini .coopbar b{font-size:1rem}
 
 #count{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; font:900 22rem/1 var(--font-display); color:var(--accent); pointer-events:none; text-shadow:0 .1rem 0 var(--bg); z-index:3}
 #result{position:fixed; inset:0; background:var(--scrim); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1.2rem; text-align:center; z-index:4}
@@ -181,14 +185,15 @@ function layout(){
   var gap=4*rem, pad=4*rem;
   var byH=(H-9*rem)/ROWS;
   var byW=(W-pad-gap-2*perPanelExtra)/(2*COLS);
-  if(match&&match.coop)byW=coPanel2?(W-pad-gap-4*perPanelExtra)/(2*COOP_COLS):(W-pad-2*perPanelExtra)/COOP_COLS;
+  var MINI=0.4;                                    /* the computer team's board is this fraction of the size of yours */
+  if(match&&match.coop)byW=coPanel2?(W-pad-gap-2*perPanelExtra)/(COOP_COLS*(1+MINI)):(W-pad-2*perPanelExtra)/COOP_COLS;
   cs=Math.max(8,Math.floor(Math.min(byH,byW)));
   [coPanel,coPanel2].forEach(function(cp){
     if(!cp)return;
-    setCanvas(cp.board,COOP_COLS*cs,ROWS*cs);
+    cp.cs=cp===coPanel2?Math.max(5,Math.floor(cs*MINI)):cs;
+    setCanvas(cp.board,COOP_COLS*cp.cs,ROWS*cp.cs);
     var cns=Math.max(7,Math.floor(cs*0.62)); cp.ns=cns;
-    var rw=Math.ceil((coPanel2?6:7.5)*rem);
-    for(var k=0;k<2;k++){setCanvas(cp.nxt[k],rw,Math.ceil(cns*6));setCanvas(cp.hld[k],rw,Math.ceil(cns*3));}
+    for(var k=0;k<cp.nxt.length;k++){setCanvas(cp.nxt[k],Math.ceil(7.5*rem),Math.ceil(cns*6));setCanvas(cp.hld[k],Math.ceil(7.5*rem),Math.ceil(cns*3));}
   });
   panels.forEach(function(p){
     if(!p)return;
@@ -398,15 +403,15 @@ function startMatch(seatList,cpu){
 /* a wide co-op board with a rail for each lane; names and colours for the lanes, cpu for the computer team's board */
 function buildCoopPanel(title,names,cols,cpu){
   var el=document.createElement('section');
-  el.className='panel coop';
+  el.className='panel coop'+(cpu?' mini':'');
   function rail(i){
     return '<div class="side" style="--pc:'+cols[i]+'"><div class="who"><i></i><span>'+names[i]+'</span></div><em class="away" hidden>Reconnecting</em>'+
       '<div class="blk"><div class="lbl">Hold</div><canvas class="hld'+i+'"></canvas></div><div class="blk"><div class="lbl">Next</div><canvas class="nxt'+i+'"></canvas></div></div>';
   }
   el.innerHTML='<div class="coopbar"><span>'+title+'</span><span>Lines<b class="ln">0</b></span><span>Level<b class="lv">1</b></span>'+
     (cpu||match.vsCpu?'<span class="kob" hidden>KOs<b class="kn">0</b></span>':'<span>Best<b class="bs">'+coopBest+'</b></span>')+'</div>'+
-    '<div class="row">'+rail(0)+'<div class="flipper"><canvas class="board"></canvas></div>'+rail(1)+'</div>';
-  return {el:el,flip:el.querySelector('.flipper'),board:el.querySelector('canvas.board'),hld:[el.querySelector('.hld0'),el.querySelector('.hld1')],nxt:[el.querySelector('.nxt0'),el.querySelector('.nxt1')],
+    '<div class="row">'+(cpu?'':rail(0))+'<div class="flipper"><canvas class="board"></canvas></div>'+(cpu?'':rail(1))+'</div>';
+  return {el:el,flip:el.querySelector('.flipper'),board:el.querySelector('canvas.board'),hld:cpu?[]:[el.querySelector('.hld0'),el.querySelector('.hld1')],nxt:cpu?[]:[el.querySelector('.nxt0'),el.querySelector('.nxt1')],
     away:el.querySelectorAll('em.away'),ln:el.querySelector('.ln'),lv:el.querySelector('.lv'),kn:el.querySelector('.kn'),kob:el.querySelector('.kob'),shown:''};
 }
 /* a team's board topped out: with KO rules the other team scores and the board starts again, otherwise the other team wins */
@@ -533,8 +538,9 @@ function coopTick(ts){
   });
 }
 function drawCoopPanel(cp,c,team){
-  drawCoop(cp.board,c,cs); if(c.over&&c.koUntil)drawKO(cp.board,cs); syncFlip(cp.flip,c);
-  for(var q=0;q<2;q++){drawNext(cp.nxt[q],c.p[q],cp.ns,2);drawHold(cp.hld[q],c.p[q],cp.ns);}
+  var ccs=cp.cs||cs;
+  drawCoop(cp.board,c,ccs); if(c.over&&c.koUntil)drawKO(cp.board,ccs); syncFlip(cp.flip,c);
+  for(var q=0;q<cp.nxt.length;q++){drawNext(cp.nxt[q],c.p[q],cp.ns,2);drawHold(cp.hld[q],c.p[q],cp.ns);}
   var kos=match.kos[team], key=c.lines+'|'+c.level+'|'+kos;
   if(cp.shown!==key){cp.shown=key;cp.ln.textContent=c.lines;cp.lv.textContent=c.level;if(cp.kn)cp.kn.textContent=kos+' / '+KO_TO_WIN;if(team===0)bcState();}
 }
